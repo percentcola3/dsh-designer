@@ -136,7 +136,7 @@ import {Context} from ${JSON.stringify(moduleURL('cordis'))};
 import * as persistencePlugin from ${JSON.stringify(moduleURL('dsh-session-persistence-jsonl'))};
 import {SessionAlreadyOwnedError} from ${JSON.stringify(moduleURL('dsh-session-persistence'))};
 import {ExactSessionAgents} from ${JSON.stringify(new URL('./client-session.js',import.meta.url).href)};
-const base=${JSON.stringify(path.resolve(import.meta.dirname,'../../.build/designer-home-session-qa'))};await mkdir(base,{recursive:true});
+const base=${JSON.stringify(path.resolve(import.meta.dirname,'.build/designer-home-session-qa'))};await mkdir(base,{recursive:true});
 const root=await mkdtemp(path.join(base,'native-writer-contract-')),ctx=new Context();let provider,handle;
 try{
  provider=ctx.plugin(persistencePlugin,{root,compression:'none'});await provider.await();
