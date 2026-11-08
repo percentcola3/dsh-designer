@@ -72,7 +72,7 @@ test('official zg indexes real text with static local 16M model and retrieves BM
 test('readonly Node permission query uses official native FTS index without lock, model or download writes', {timeout: 30000}, async () => {
   await initialized();
   const before = await snapshot(path.join(libraryRoot, 'knowledge', identity.knowledgeId, 'indexes'));
-  const result = await childRequest({operation: 'search', libraryRoot, ...identity, mode: 'bm25', query: 'authentication', limit: 10}, ['--experimental-permission', '--allow-fs-read=*', '--allow-addons']);
+  const result = await childRequest({operation: 'search', libraryRoot, ...identity, mode: 'bm25', query: 'authentication', limit: 10}, ['--permission', '--allow-fs-read=*', '--allow-addons']);
   assert.equal(result.exitCode, 0, result.stderr); assert.equal(result.receipt.ok, true, JSON.stringify(result.receipt)); assert.ok(result.receipt.result.results.length > 0);
   assert.deepEqual(await snapshot(path.join(libraryRoot, 'knowledge', identity.knowledgeId, 'indexes')), before);
 });
@@ -80,9 +80,9 @@ test('readonly Node permission query uses official native FTS index without lock
 test('vector-index scratch denial fails closed instead of widening read-only policy', {timeout:180000,skip:modelSkip}, async () => {
   await initializedModel();
   const libraryRoot=modelLibraryRoot;
-  const result = await childRequest({operation: 'search', libraryRoot, ...identity, mode: 'bm25', query: 'authentication'}, ['--experimental-permission', '--allow-fs-read=*', '--allow-addons']);
+  const result = await childRequest({operation: 'search', libraryRoot, ...identity, mode: 'bm25', query: 'authentication'}, ['--permission', '--allow-fs-read=*', '--allow-addons']);
   assert.equal(result.receipt.ok, false); assert.equal(result.receipt.error.code, 'ZG_READONLY_SCRATCH_UNAVAILABLE');
-  const status = await childRequest({operation: 'status', libraryRoot}, ['--experimental-permission', '--allow-fs-read=*', '--allow-addons']);
+  const status = await childRequest({operation: 'status', libraryRoot}, ['--permission', '--allow-fs-read=*', '--allow-addons']);
   assert.equal(status.receipt.result.queryReadonlyScratch, true); assert.equal(status.receipt.result.queryRequiresScratch, false); assert.equal(status.receipt.result.queryIsolation, 'read-only-index');
   assert.equal(status.receipt.result.indexRequiresModel, false); assert.equal(status.receipt.result.readonlyScratchError, undefined);
   assert.doesNotMatch(JSON.stringify(status.receipt.result), /\/var\/|\/private\/|\/Users\/|\/tmp\//);
@@ -99,7 +99,7 @@ test('official native query writes only to an existing-grant machine cache and p
   await initialized();
   const before = await snapshot(path.join(libraryRoot, 'knowledge', identity.knowledgeId, 'indexes'));
   const scratch = await machineCache();
-  const result = await childRequest({operation: 'search', libraryRoot, ...identity, mode: 'bm25', query: 'authentication', scratch}, ['--experimental-permission', '--allow-fs-read=*', '--allow-addons', '--allow-fs-write=' + scratch.directory]);
+  const result = await childRequest({operation: 'search', libraryRoot, ...identity, mode: 'bm25', query: 'authentication', scratch}, ['--permission', '--allow-fs-read=*', '--allow-addons', '--allow-fs-write=' + scratch.directory]);
   assert.equal(result.exitCode, 0, JSON.stringify(result.receipt)); assert.equal(result.receipt.result.queryIsolation, 'workspace-cache'); assert.equal(result.receipt.result.nativeQueryMode, 'workspace-write'); assert.ok(result.receipt.result.results.length > 0);
   assert.deepEqual(await snapshot(path.join(libraryRoot, 'knowledge', identity.knowledgeId, 'indexes')), before);
   await assert.rejects(fs.stat(scratch.directory), {code: 'ENOENT'});
@@ -113,7 +113,7 @@ test('native health fixture is constant and readonly probe neither changes nor d
   const built = await runZgHelper({operation: 'probe.build', libraryRoot, scratch, files: [{path: '/outside', text: 'untrusted'}], query: 'untrusted'});
   assert.equal(built.built, true); assert.equal(built.vectorEmbedding, false);
   const before = await snapshot(scratch.directory);
-  const queried = await childRequest({operation: 'probe.query', libraryRoot, scratch, files: [], query: 'untrusted'}, ['--experimental-permission', '--allow-fs-read=*', '--allow-addons']);
+  const queried = await childRequest({operation: 'probe.query', libraryRoot, scratch, files: [], query: 'untrusted'}, ['--permission', '--allow-fs-read=*', '--allow-addons']);
   assert.equal(queried.exitCode, 0, JSON.stringify(queried.receipt)); assert.equal(queried.receipt.result.queried, true); assert.equal(queried.receipt.result.nativeQueryMode, 'read-only');
   assert.deepEqual(await snapshot(scratch.directory), before);
   await runZgHelper({operation: 'cleanup', libraryRoot, scratch}); await assert.rejects(fs.stat(scratch.directory), {code: 'ENOENT'});
@@ -185,7 +185,7 @@ test('default indexing and read-only FTS need no model cache, downloads or scrat
   const ready = await runZgHelper({operation: 'index', libraryRoot: root, ...identity, files});
   assert.equal(ready.mode, 'bm25'); assert.equal(ready.backend, 'zvec-fts'); assert.deepEqual(ready.modes, ['bm25']); assert.equal(ready.vectorEmbedding, false); assert.equal(ready.indexRequiresModel, false);
   const before = await snapshot(root);
-  const result = await childRequest({operation: 'search', libraryRoot: root, ...identity, query: 'authentication'}, ['--experimental-permission', '--allow-fs-read=*', '--allow-addons']);
+  const result = await childRequest({operation: 'search', libraryRoot: root, ...identity, query: 'authentication'}, ['--permission', '--allow-fs-read=*', '--allow-addons']);
   assert.equal(result.exitCode, 0, JSON.stringify(result.receipt)); assert.equal(result.receipt.result.backend, 'zvec-fts'); assert.equal(result.receipt.result.queryIsolation, 'read-only-index'); assert.ok(result.receipt.result.results.length > 0);
   for (const mode of ['semantic', 'hybrid']) await assert.rejects(runZgHelper({operation: 'search', libraryRoot: root, ...identity, query: 'authentication', mode}), {code: 'ZG_MODE_UNAVAILABLE'});
   assert.deepEqual(await snapshot(root), before, 'all source, manifest and native storage SHA/mtimeNs/mode remain unchanged');

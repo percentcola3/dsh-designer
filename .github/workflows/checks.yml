@@ -40,7 +40,7 @@ jobs:
       - name: Portable regression tests
         run: |
           mkdir -p artifacts
-          npm test > artifacts/tests.tap 2>&1 || { tail -n 160 artifacts/tests.tap; exit 1; }
+          npm test -- --test-reporter=tap > artifacts/tests.tap 2>&1 || { tail -n 160 artifacts/tests.tap; exit 1; }
           tail -n 12 artifacts/tests.tap
       - name: Validate runtime package
         run: npm run verify:package

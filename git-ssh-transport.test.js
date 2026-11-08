@@ -138,14 +138,17 @@ test('timeouts and aborts destroy stalled SSH channels without replaying command
   const server = await fixture(t, {handler(channel) { if (streamBody) { channel.write(advertisement); channel.on('data', () => started.resolve()); } }});
   let transport = createSshHttpClient({remoteUrl: server.remoteUrl, credentials: server.credentials, timeoutMs: 100});
   await assert.rejects(transport.request({url: transport.virtualUrl + '/info/refs?service=git-upload-pack'}), code('SSH_TIMEOUT'));
+  // A busy runner may time out during authentication, before the first exec.
+  const timedOutCommands = server.commands.length;
+  assert.ok(timedOutCommands <= 1, 'a timeout must never replay its command');
   streamBody = true; const abort = new AbortController();
   transport = createSshHttpClient({remoteUrl: server.remoteUrl, credentials: server.credentials, timeoutMs: 2000, signal: abort.signal});
   const pending = transport.request({url: transport.virtualUrl + '/git-receive-pack', method: 'POST', body: [Buffer.from('request')]});
   const rejected = assert.rejects(pending, error => { code('SSH_ABORTED')(error); assert.doesNotMatch(error.message, /secret/); return true; });
   await started.promise; abort.abort(new Error('secret')); await rejected;
-  assert.equal(server.commands.length, 2);
+  assert.equal(server.commands.length, timedOutCommands + 1);
   await assert.rejects(transport.request({url: transport.virtualUrl + '/info/refs?service=git-upload-pack'}), code('SSH_ABORTED'));
-  assert.equal(server.commands.length, 2);
+  assert.equal(server.commands.length, timedOutCommands + 1);
 });
 
 test('advertisement, request body and response are bounded', async t => {
