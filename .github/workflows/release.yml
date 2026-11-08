@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to release (for example v0.4.20)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml
+    with:
+      ref: ${{ inputs.tag || github.ref }}
+      release-tag: ${{ inputs.tag || github.ref_name }}
+  publish:
+    name: Publish private GitHub release
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: designer-package
+          path: artifacts
+      - name: Verify downloaded package
+        working-directory: artifacts
+        run: sha256sum -c SHA256SUMS
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release already exists. Published assets are immutable; use a new version."
+            exit 1
+          fi
+          prerelease=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then prerelease+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" artifacts/*.tgz artifacts/SHA256SUMS artifacts/release.json --verify-tag --generate-notes --title "$RELEASE_TAG" "${prerelease[@]}"

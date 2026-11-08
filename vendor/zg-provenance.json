@@ -1,0 +1,516 @@
+{
+  "schemaVersion": 1,
+  "embeddedSources": [
+    {
+      "name": "@zvec/zvec",
+      "version": "0.7.0",
+      "url": "https://registry.npmjs.org/@zvec/zvec/-/zvec-0.7.0.tgz",
+      "integrity": "sha512-MT/M1CMnQ0k1w/Qh8iiCl8vXawonN0QwOr5dVq+92SMa6hMArHBVs93qIw34X772mTqFevYKD79FEPKjfqMWmA==",
+      "cacheDirectory": "zvec-0.7.0",
+      "tarballSha256": "4548eb53664bc1867fbcd3fa441ddffbe7aa00da9ccd7cfee01286a1a9fa52d3",
+      "tarballBytes": 18268,
+      "files": [
+        {
+          "path": "src/index.js",
+          "sha256": "3e4d2e18697a68217c90d3323e8f1e998724e3dceafccb53ed07fd2a445efe8e"
+        },
+        {
+          "path": "src/prebuilt.js",
+          "sha256": "e3784b2f06a0eec8106c82efb38261388bb6287b43836c810f4e68c2106d6a31"
+        }
+      ]
+    },
+    {
+      "name": "detect-libc",
+      "version": "2.1.2",
+      "url": "https://registry.npmjs.org/detect-libc/-/detect-libc-2.1.2.tgz",
+      "integrity": "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==",
+      "cacheDirectory": "detect-libc-2.1.2",
+      "tarballSha256": "270dec0fc06cff86481da8af2dd8f18dee6b602790b14ef0e1c2c18d7da39427",
+      "tarballBytes": 7776,
+      "files": [
+        {
+          "path": "lib/detect-libc.js",
+          "sha256": "5de6a1c1abec8bba5ea1261cf819d83a73c92ebe72b879ae48c59ca12320a462"
+        },
+        {
+          "path": "lib/elf.js",
+          "sha256": "0e8820f00ee11d179d94894d4f97a6e87c34ab59e5dd4d3a571dfabcecf043af"
+        },
+        {
+          "path": "lib/filesystem.js",
+          "sha256": "5c98fb66b559d0b4fa82c7a3e39d9ab6840f022c4c73e6b1a73ac6d16ec13fd7"
+        },
+        {
+          "path": "lib/process.js",
+          "sha256": "f37dd0ead9f70b50c6f5529c600e1cdf076e3c3bc8e6b4a0a9820a8d65244628"
+        }
+      ]
+    }
+  ],
+  "source": {
+    "name": "@zvec/zvec-grep",
+    "version": "0.2.1",
+    "url": "https://registry.npmjs.org/@zvec/zvec-grep/-/zvec-grep-0.2.1.tgz",
+    "integrity": "sha512-trVTNazVGbF5IDr6r7tKzfsuXArhxLRUCD1R3lVdPt9VppwldJ5OjUkjVBqXUMO2/3zZ5Wefl0+34X0TWG8KkQ==",
+    "tarballSha256": "65c691e4fac082dffc408e7329d66096c1e4753513cab9d9d5500382b9b6327f",
+    "tarballBytes": 433976,
+    "unpackedBytes": 2155651,
+    "fileCount": 403
+  },
+  "build": {
+    "tool": "esbuild-wasm",
+    "version": "0.28.2",
+    "scriptSha256": "0969edce65d634ace9beed071fe147e8d70787f6fe7df8bbe7ed68fcdf9cc901",
+    "target": "node22",
+    "format": "esm",
+    "rebuild": "node plugins/dsh-designer/build-zg-runtime.mjs --offline",
+    "network": "Only the pinned npm tar download when absent; no install or lifecycle script execution."
+  },
+  "exports": [
+    "createZvecGrep",
+    "createEmbeddingModel",
+    "EmbeddingPurpose",
+    "isImageContent",
+    "isTextContent",
+    "WorkspaceIndex",
+    "readWorkspaceManifest",
+    "workspaceIndexInfoFromManifest",
+    "ZVecCollectionSchema",
+    "ZVecCreateAndOpen",
+    "ZVecOpen",
+    "ZVecInitialize",
+    "ZVecDataType",
+    "ZVecIndexType",
+    "ZVecLogLevel"
+  ],
+  "nativeExports": {
+    "source": "@zvec/zvec",
+    "version": "0.7.0",
+    "mappings": {
+      "ZVecCollectionSchema": "binding.CollectionSchema",
+      "ZVecCreateAndOpen": "binding.createAndOpen",
+      "ZVecOpen": "binding.open",
+      "ZVecInitialize": "binding.initialize",
+      "ZVecDataType": "binding.DataType",
+      "ZVecIndexType": "binding.IndexType",
+      "ZVecLogLevel": "binding.LogLevel"
+    },
+    "distribution": "Direct re-exports from the verified inlined official wrapper; preserves native binding and jieba dictionary resolution. Supports vector-free FTS collections without an embedding model."
+  },
+  "internalExports": [
+    "WorkspaceIndex",
+    "readWorkspaceManifest",
+    "workspaceIndexInfoFromManifest"
+  ],
+  "runtimeDependencies": {
+    "@huggingface/tokenizers": "0.1.3",
+    "@vscode/ripgrep": "1.18.0",
+    "web-tree-sitter": "0.20.8",
+    "tree-sitter-wasms": "0.1.13"
+  },
+  "optionalDependencies": {
+    "@zvec/bindings-darwin-arm64": "0.7.0",
+    "@zvec/bindings-linux-arm64": "0.7.0",
+    "@zvec/bindings-linux-arm64-musl": "0.7.0",
+    "@zvec/bindings-linux-x64": "0.7.0",
+    "@zvec/bindings-linux-x64-musl": "0.7.0",
+    "@zvec/bindings-win32-x64": "0.7.0"
+  },
+  "dynamicExternalImports": [
+    "@zvec/bindings-darwin-arm64",
+    "@zvec/bindings-linux-arm64",
+    "@zvec/bindings-linux-arm64-musl",
+    "@zvec/bindings-linux-x64",
+    "@zvec/bindings-linux-x64-musl",
+    "@zvec/bindings-win32-x64"
+  ],
+  "externalImports": [
+    "@huggingface/tokenizers",
+    "@vscode/ripgrep",
+    "@zvec/bindings-darwin-arm64",
+    "@zvec/bindings-linux-arm64",
+    "@zvec/bindings-linux-arm64-musl",
+    "@zvec/bindings-linux-x64",
+    "@zvec/bindings-linux-x64-musl",
+    "@zvec/bindings-win32-x64",
+    "node:async_hooks",
+    "node:child_process",
+    "node:crypto",
+    "node:fs",
+    "node:fs/promises",
+    "node:module",
+    "node:os",
+    "node:path",
+    "node:perf_hooks",
+    "node:stream",
+    "node:stream/promises",
+    "node:util",
+    "node:worker_threads",
+    "web-tree-sitter"
+  ],
+  "runtimeAssets": [
+    {
+      "path": "zg-model2vec-worker.js",
+      "resolution": "new URL(\"./zg-model2vec-worker.js\", import.meta.url)"
+    },
+    {
+      "package": "web-tree-sitter",
+      "resource": "tree-sitter.wasm",
+      "resolution": "Official external web-tree-sitter package owns its WASM loader."
+    },
+    {
+      "package": "tree-sitter-wasms",
+      "resource": "out/tree-sitter-{c,cpp,go,java,javascript,python,rust,tsx,typescript}.wasm",
+      "resolution": "Official createRequire(import.meta.url).resolve(\"tree-sitter-wasms/package.json\") resolves relative to the installed vendor file."
+    }
+  ],
+  "disabledProviders": [
+    "transformers-js",
+    "llama-cpp"
+  ],
+  "replacements": [
+    {
+      "kind": "disabled-backend",
+      "request": "./backends/llama-cpp.js"
+    },
+    {
+      "kind": "disabled-backend",
+      "request": "./backends/transformers-js.js"
+    },
+    {
+      "kind": "native-wrapper-dirname",
+      "to": "vendor/zg-zvec-0.7.0/src (virtual upstream directory; no bundled binary is shipped)"
+    },
+    {
+      "kind": "worker-url",
+      "from": "new URL(\"./model2vec-worker.js\", import.meta.url)",
+      "to": "new URL(\"./zg-model2vec-worker.js\", import.meta.url)"
+    }
+  ],
+  "sourceFiles": [
+    {
+      "path": "dist/authorization/operation.js",
+      "sha256": "d62f971181eddd5e302039878ff5b95e2ddead958d704cd1a164597343c86435"
+    },
+    {
+      "path": "dist/authorization/store.js",
+      "sha256": "d03cd7ac2370157b28121bf172ecd77a672a6a9f400c7f0f6db47f0999851e45"
+    },
+    {
+      "path": "dist/authorization/types.js",
+      "sha256": "f47224d47c3b36db986b5ce0e544672c178ec65c80ccc67be238d3b6aebebe60"
+    },
+    {
+      "path": "dist/engine/code-formats.js",
+      "sha256": "10c7243c939a4f60c3bfc6edc1bdda136cc270c72c6ed1f4ffbf20b9c7967bfe"
+    },
+    {
+      "path": "dist/engine/config.js",
+      "sha256": "cd5930eb62ac5027b81e158229e4fbe64857b2f5f667e0a0660be1971a022c2f"
+    },
+    {
+      "path": "dist/engine/errors.js",
+      "sha256": "4c0e6eacc12f6574fbc5a88fdfd5b6e5835d66a265d8a29ccc0b5d7091e87dd6"
+    },
+    {
+      "path": "dist/engine/extraction/code/adapter.js",
+      "sha256": "d5b75b44cc8d3b7e1f0db7a0c8818e54a082a33b92d67e31e1996ab800b6de53"
+    },
+    {
+      "path": "dist/engine/extraction/code/extractor.js",
+      "sha256": "e47fe9480b607a5c59e8da0082034310bd47613e5fceb42ba453ac7439166ded"
+    },
+    {
+      "path": "dist/engine/extraction/code/families/c-family.js",
+      "sha256": "481da3b7e35c1112c47c2d76e4c920fc18dced0a833ccbc7937d3b3db6f18a68"
+    },
+    {
+      "path": "dist/engine/extraction/code/families/js-ts.js",
+      "sha256": "5b17fdaf1c0eaff929215923d35f0383e3f378d0fe5a26bdb749d858a4f31dd8"
+    },
+    {
+      "path": "dist/engine/extraction/code/families/metadata.js",
+      "sha256": "36885aae252f72d7f893fdd5f34251ec0daeb6b7314c88bad7294ec190629917"
+    },
+    {
+      "path": "dist/engine/extraction/code/families/name-field.js",
+      "sha256": "ca37da227e4b03e199bd0b045d8b6b39e61672ffbbbee672e216ed85ff7dc0ca"
+    },
+    {
+      "path": "dist/engine/extraction/code/languages/c.js",
+      "sha256": "be4f7b3ba23b15ea133d3eb61113c9548a9f9b907804a5d19313fbb7a01d8a43"
+    },
+    {
+      "path": "dist/engine/extraction/code/languages/cpp.js",
+      "sha256": "2a9fa06e9fc3d41bc8153468a1f71039d7d23fd593ad06b837539f35bb6f1829"
+    },
+    {
+      "path": "dist/engine/extraction/code/languages/go.js",
+      "sha256": "2d74a76dd1344ee45d7da2e08872c0d619a6a69479bb015e192dec7ed4390ebc"
+    },
+    {
+      "path": "dist/engine/extraction/code/languages/java.js",
+      "sha256": "d4f27130a55d92e4c84b53c9484e6e8e72837fd4f4df20b6f7c4a4781cedc7c7"
+    },
+    {
+      "path": "dist/engine/extraction/code/languages/javascript.js",
+      "sha256": "990530c7196d9fc1e225bb1eeff18cfbbb77600bb44f6ee6fc22d0a45fa1cc89"
+    },
+    {
+      "path": "dist/engine/extraction/code/languages/python.js",
+      "sha256": "62c791ccdcefd82e89a3dd1f6239dab4169bf6c0de36fb0996f955a8e86aa06c"
+    },
+    {
+      "path": "dist/engine/extraction/code/languages/rust.js",
+      "sha256": "6dfaa394abf4c8591631ba47a9ba22a244f3bb1a6d67ab49d3854a04a89f0179"
+    },
+    {
+      "path": "dist/engine/extraction/code/languages/typescript.js",
+      "sha256": "19cbf5b270cca03e60a5308f60bf0b3e23fb29f1f06b0b367259503410270c16"
+    },
+    {
+      "path": "dist/engine/extraction/code/tree-sitter/grammar.js",
+      "sha256": "998c428c53b17b14211a08dfc4f365d251939e3930f0f9843c8e5ae3bd934ef1"
+    },
+    {
+      "path": "dist/engine/extraction/code/tree-sitter/nodes.js",
+      "sha256": "ddb9428a48924ea64f8a76750d3f1f21bb4ec617980dcad4b025c4044de324a5"
+    },
+    {
+      "path": "dist/engine/extraction/code/tree-sitter/parser.js",
+      "sha256": "4c9758fe582a7f97441c7b5ccaea3b42b4dc17ad02a1411025869714adf011ce"
+    },
+    {
+      "path": "dist/engine/extraction/ids.js",
+      "sha256": "ef7f487be5cdae328cb6381558c397341928d8b27af6ea9af360cc07010882a5"
+    },
+    {
+      "path": "dist/engine/extraction/image/extractor.js",
+      "sha256": "2e7615b45d5113ee2f03d5d1ef823e01d6d5e8529cde2d5d5adba4d4416961bd"
+    },
+    {
+      "path": "dist/engine/extraction/index.js",
+      "sha256": "54626b64d959a76de58385aed3c1b0b82b30fa63dd6ed9522577172169fa712d"
+    },
+    {
+      "path": "dist/engine/extraction/markdown/extractor.js",
+      "sha256": "788a36fda9ec9c60c880788ee783f9989439cd0f934a0e5e5a50d58cbb3218f3"
+    },
+    {
+      "path": "dist/engine/extraction/runtime.js",
+      "sha256": "8e4bf2f2126f4ded46a0ada1cc1827755ed2eec36592408046f13ff052ac0b68"
+    },
+    {
+      "path": "dist/engine/extraction/source.js",
+      "sha256": "bd459cecc07e511e7d39d6d1d1bd5e15c55e59a60d0c73a6a33d8bb8336b620d"
+    },
+    {
+      "path": "dist/engine/extraction/text/extractor.js",
+      "sha256": "599e45528a144b0bdf573ec175e2220a0be838fed5ce468154c278ee890d8316"
+    },
+    {
+      "path": "dist/engine/extraction/vector-content.js",
+      "sha256": "8242d0a54156b418072c0df8dedf306f86d2e51dd8ce0575f7c7f34f95ac2a86"
+    },
+    {
+      "path": "dist/engine/file-size-policy.js",
+      "sha256": "1b4e7ccbc19f2fd87f0a89955a9092880b7206215e9c5c3124b0e049a99c2a4a"
+    },
+    {
+      "path": "dist/engine/file-type.js",
+      "sha256": "82441bf4fc1e892d29d82fae26df99aca68bef4cba69ddb27df2d48993367fe1"
+    },
+    {
+      "path": "dist/engine/index-status.js",
+      "sha256": "3a6930ec43d1fc69814c67d51da01918a669465c7df4f053b1633e3b5692dbc8"
+    },
+    {
+      "path": "dist/engine/manifest.js",
+      "sha256": "525f48a79589b115d21e3ab9f2e201e46215b603d4d8661c42a8fe9e5baeea83"
+    },
+    {
+      "path": "dist/engine/models/backends/model2vec-runtime.js",
+      "sha256": "9ccc6409c5ca71d53f06051d8ff767b267987157cfc228df120914c9abf06b80"
+    },
+    {
+      "path": "dist/engine/models/backends/model2vec-tokenizer.js",
+      "sha256": "201db929e083981a4e02016257f5bc01576d6032a69c1a3cbb981d22904fd25a"
+    },
+    {
+      "path": "dist/engine/models/backends/model2vec-worker-pool.js",
+      "sha256": "253b072a4b02dedb6210c06207aab3cb63874b210f681d17dc6a34708d3bd913"
+    },
+    {
+      "path": "dist/engine/models/backends/model2vec-worker.js",
+      "sha256": "b40e4cb06b7cc0f46a945d0254daa43b5958c0e5e4173d16818f22320e6782ce"
+    },
+    {
+      "path": "dist/engine/models/backends/model2vec.js",
+      "sha256": "b17e57274016d672e6ed7700900ffbce9dfbbf71fa387dee72666c300b14d883"
+    },
+    {
+      "path": "dist/engine/models/backends/qwen.js",
+      "sha256": "7a3b085c44fdc864d1cbd153e145e14f784093c2761cc4803b1865fefd300ed3"
+    },
+    {
+      "path": "dist/engine/models/catalog.js",
+      "sha256": "2aace85853c84b7ba5f30795cd4f456033f469838f933e8fd2790cfcb7a6c05e"
+    },
+    {
+      "path": "dist/engine/models/download-progress.js",
+      "sha256": "da12a563045f6c2c6bcfb4cb531f167303adb03c5de36cc020caaf8523c95dd3"
+    },
+    {
+      "path": "dist/engine/models/embeddings.js",
+      "sha256": "e5aeae72f3069768a740b34b92c567023e5ed5b6ef56ab62543140e48d3395fb"
+    },
+    {
+      "path": "dist/engine/models/factory.js",
+      "sha256": "4c6ef83e6e99602ca9322e1796cd9adb2d954df0ebe9dea6fa4ded11cba13e29"
+    },
+    {
+      "path": "dist/engine/models/index.js",
+      "sha256": "9e367aaa2b438444573ad5e950c68ce6d726af2a33be14ae5fd28f6c8b1d8ca5"
+    },
+    {
+      "path": "dist/engine/models/resolution.js",
+      "sha256": "8173e87c2cd0e7ff936f509199e7f697a70ed941d73ab7e0e863746fb5af6fef"
+    },
+    {
+      "path": "dist/engine/pipeline/indexing/index.js",
+      "sha256": "0d04aab1ab335e7c551691f4ac19d12052be6ff8490ab81832bfeff737f6c21c"
+    },
+    {
+      "path": "dist/engine/pipeline/indexing/input-budget.js",
+      "sha256": "e565bf11cb2be337c017878128d6a43000c5f5b389651aa66b5ac2f96d644dd1"
+    },
+    {
+      "path": "dist/engine/pipeline/indexing/root-paths.js",
+      "sha256": "e69d4aa6d67cf03923260beab15d59bdd260d466553ad465973a0f052816a53e"
+    },
+    {
+      "path": "dist/engine/pipeline/indexing/scanner/index.js",
+      "sha256": "eb5769067045c69217243483697054b8d32fea333a0b3590b79be27ff0b8f1b9"
+    },
+    {
+      "path": "dist/engine/pipeline/search/index.js",
+      "sha256": "b8893a00a8efa9ce871815c59fc7a394821f3f3cc2a11d3c863480a159099e68"
+    },
+    {
+      "path": "dist/engine/service/index.js",
+      "sha256": "20f02956c79e857ca46dfa5d8fb4d21126e7dcb18683f7f0eb13339c791a32ce"
+    },
+    {
+      "path": "dist/engine/service/lexical.js",
+      "sha256": "0ed606fba4f93953fe31320f38d942af14b7e65e1668c291a3f81fff8ae8525a"
+    },
+    {
+      "path": "dist/engine/service/root.js",
+      "sha256": "542d5dcfbe9887eb85bb99104d91ae02a550ed0bf354deb4a7af777669c75297"
+    },
+    {
+      "path": "dist/engine/service/structure-enrichment.js",
+      "sha256": "2a323eb2120684fa880348426e741d15be352d264e4a83ebeb3cf3ab6cf6884c"
+    },
+    {
+      "path": "dist/engine/service/workspace-index.js",
+      "sha256": "25c1eaa552b52b35066a7ae1d44a18067e5c9a044a4166453aa7197dda210218"
+    },
+    {
+      "path": "dist/engine/service/zvec-grep.js",
+      "sha256": "cbe025fb3653ac81cd6184873279d9e9a0a8fa9b92f38ffe7045f0981f762e10"
+    },
+    {
+      "path": "dist/engine/storage/index.js",
+      "sha256": "c018930a48fe2de60266e7df338664c4efb6af616ce8be064176eabbf3c6ea37"
+    },
+    {
+      "path": "dist/engine/storage/layout.js",
+      "sha256": "8bc6479678aa3823f7a27d26091dea768ed696fb3ae3c4b9a3b0228b58683836"
+    },
+    {
+      "path": "dist/engine/storage/zvec.js",
+      "sha256": "724aac71d4574b6902fc88c26e198731c70b09791988a7a0f7813bbe85befec1"
+    },
+    {
+      "path": "dist/engine/types.js",
+      "sha256": "ebc3eeedf2c7f8847f82112f817e4c23d780eb64fe912d23afc9737b6dad5ea0"
+    },
+    {
+      "path": "dist/engine/utils/daemon-lease.js",
+      "sha256": "8962896c62eab3ac1d2912e2b727310ee4ce83c8c30b2e0433610f93f99606da"
+    },
+    {
+      "path": "dist/engine/utils/file-selection.js",
+      "sha256": "da561bf0202136c73988fe4546094c96146c3dce1230672bcd7ec5b7a646417a"
+    },
+    {
+      "path": "dist/engine/utils/glob.js",
+      "sha256": "c74718f7ddba9a5ff4aaf1c8193dbfbec7352bfc0220002baa25b123221244d6"
+    },
+    {
+      "path": "dist/engine/utils/hash.js",
+      "sha256": "78b77107c012921ac7ed82e5415ab5c430359519b2029ca9c6e07fb82a8508c8"
+    },
+    {
+      "path": "dist/engine/utils/json.js",
+      "sha256": "ca5994fe1059be513609af0d1a48b3a7dc19a41762425601334a9be920d74717"
+    },
+    {
+      "path": "dist/engine/utils/lock.js",
+      "sha256": "d1328550350fbbe08521f87d5466e0efde753aac8446e2176e5f733109ad80d5"
+    },
+    {
+      "path": "dist/engine/utils/path.js",
+      "sha256": "bf3aede518adcf05d2c81dcfb9b52469ed784a61aa064fd1654bc5521b65912f"
+    },
+    {
+      "path": "dist/engine/utils/timing.js",
+      "sha256": "c18020a7aa47299df46a6ba3d5d1e087973c030f8dfb82d62d7e909af7eff27e"
+    },
+    {
+      "path": "dist/index.js",
+      "sha256": "b9a2f50b56a7d121523360d6f076120378d8529835e08e827a8956d33b36eacb"
+    },
+    {
+      "path": "dist/observability/trace-context.js",
+      "sha256": "45c6ddf93a24122c5021994f64f018c256edb59f72254fd9f1c9a73536ee5179"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "zg-core.js",
+      "bytes": 389211,
+      "sha256": "bc070a4dc6d43d7ba3933e3c64db86b6c91ac880b4b0a90b07b0dd5ed6dd568f"
+    },
+    {
+      "path": "zg-model2vec-worker.js",
+      "bytes": 6704,
+      "sha256": "e08b75fb4bb75db0e98155f65e4b9d818b14943b3f4ee63deb608cc2dc40042c"
+    },
+    {
+      "path": "zg-providers-disabled.js",
+      "bytes": 711,
+      "sha256": "1ca6f04edf16c9f73ee3dd75c30cc1185f0e85a89e3301df8e8ff5f88d63fa83"
+    }
+  ],
+  "licenses": [
+    {
+      "path": "licenses/zg-LICENSE.txt",
+      "sha256": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1"
+    },
+    {
+      "path": "licenses/zg-NOTICE.txt",
+      "sha256": "d21d4a47be2fd6edd21877a5674979fb49052bfbc446c476d69de9e9f34bf51b"
+    },
+    {
+      "path": "licenses/zvec-LICENSE.txt",
+      "sha256": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1"
+    },
+    {
+      "path": "licenses/zg-detect-libc-LICENSE.txt",
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+    }
+  ]
+}

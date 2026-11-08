@@ -1,0 +1,263 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-11-05T08:51:57.754Z",
+  "measurementPolicy": {
+    "liveAndAuthoredAreSeparate": true,
+    "approximation": "chars / 4",
+    "afterMustComeFromNewLiveInspect": true,
+    "newToolTotalMustBeIncluded": true
+  },
+  "before": {
+    "label": "before-v0.4-install",
+    "source": {
+      "kind": "live-agent-tool-registry",
+      "platform": "host",
+      "provider": "Tool",
+      "method": "listTools",
+      "input": {},
+      "rawCapturePath": "/var/folders/j6/ml_fgxxj1vgc8fj0ljm93pcc0000gn/T/dsh-spill-w5tTzz/session-104ae9e49939/ee7d546d3b5c-cordis_inspect_query.txt",
+      "rawCaptureSha256": "dfcf9e85138db983f1b656548747bab72f5b3aa6c10947c518ce8d20aa0c2572",
+      "artifactCreatedAt": "2026-11-05T08:51:57.754Z",
+      "runtimePackageVersion": null,
+      "versionNote": "Package cache/version metadata is not used to infer which runtime definitions are mounted."
+    },
+    "requestedNames": [
+      "designer_manage",
+      "designer_import",
+      "designer_workbench"
+    ],
+    "presentNames": [
+      "designer_manage",
+      "designer_import"
+    ],
+    "absentNames": [
+      "designer_workbench"
+    ],
+    "tools": [
+      {
+        "name": "designer_manage",
+        "description": "Manage local Designer project groups and projects, including moving projects to/from the recycle bin, HTML artboards, design-system versions and skills, or run/cancel a design agent. Read state for group/project IDs and revisions before changing them. Deleting a group keeps its projects; deleting a project preserves its files for project.restore. Returns saved metadata, requested HTML/skill content, or an AI session ID.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "state",
+                "group.create",
+                "group.update",
+                "group.delete",
+                "project.create",
+                "project.get",
+                "project.update",
+                "project.archive",
+                "project.delete",
+                "project.restore",
+                "artboard.create",
+                "artboard.get",
+                "artboard.commit",
+                "artboard.layout",
+                "snapshot.restore",
+                "system.create",
+                "system.get",
+                "system.save",
+                "system.archive",
+                "skills.list",
+                "skill.get",
+                "ai.run",
+                "ai.status",
+                "ai.cancel"
+              ]
+            },
+            "groupId": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Group ID for group actions or project assignment; null removes a project from its group."
+            },
+            "projectId": {
+              "type": "string",
+              "description": "Project identifier."
+            },
+            "artboardId": {
+              "type": "string",
+              "description": "Artboard identifier."
+            },
+            "systemId": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Design system identifier, or null to clear a project binding."
+            },
+            "snapshotId": {
+              "type": "string",
+              "description": "Snapshot identifier for snapshot.restore."
+            },
+            "expectedRevision": {
+              "type": "integer",
+              "description": "Current group, project or design-system revision, required for mutations of existing data."
+            },
+            "expectedArtboardRevision": {
+              "type": "integer",
+              "description": "Optional current artboard revision for an HTML commit."
+            },
+            "name": {
+              "type": "string",
+              "description": "Name for creation/rename; skill name for skill.get."
+            },
+            "description": {
+              "type": "string",
+              "description": "Project or design-system description."
+            },
+            "platform": {
+              "type": "string",
+              "enum": [
+                "web",
+                "mobile"
+              ]
+            },
+            "platforms": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "web",
+                  "mobile"
+                ]
+              }
+            },
+            "html": {
+              "type": "string",
+              "description": "Self-contained HTML document, at most 2 MB."
+            },
+            "summary": {
+              "type": "string",
+              "description": "Brief change description."
+            },
+            "skillNames": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "systemVersion": {
+              "type": "integer",
+              "description": "Pinned design-system version."
+            },
+            "tokens": {
+              "type": "object",
+              "description": "Design-token JSON object."
+            },
+            "guidelines": {
+              "type": "string",
+              "description": "Design-system guidelines."
+            },
+            "archived": {
+              "type": "boolean",
+              "description": "Archive when true; restore when false."
+            },
+            "canvas": {
+              "type": "object",
+              "description": "Canvas x, y and zoom."
+            },
+            "position": {
+              "type": "object",
+              "description": "Artboard x and y."
+            },
+            "viewport": {
+              "type": "object",
+              "description": "Artboard width and height."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "Design request for ai.run."
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "generate",
+                "edit"
+              ]
+            },
+            "selection": {
+              "type": "object",
+              "description": "Selected element selector, tag, text and outerHTML for ai.run."
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "action"
+          ]
+        }
+      },
+      {
+        "name": "designer_import",
+        "description": "Browse and replicate a website into a Designer project, or import Figma/MasterGo designs through an already configured official MCP connection. Assets and fonts are saved locally with a manifest. Use help for action fields; read imported context in bounded pages. Credentials are configured in the UI.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "help",
+                "browser.open",
+                "browser.action",
+                "browser.capture",
+                "browser.close",
+                "source.import",
+                "import.get",
+                "import.context",
+                "connection.status",
+                "connection.test"
+              ]
+            },
+            "projectId": {
+              "type": "string",
+              "description": "Project identifier for browser and imported-source actions."
+            },
+            "options": {
+              "type": "object",
+              "additionalProperties": true,
+              "description": "Action fields returned by help."
+            }
+          },
+          "required": [
+            "action"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ],
+    "measurements": {
+      "method": "Minified JSON.stringify of exact reported name/description/parameters/outputSchema fields; absent outputSchema stays absent. Sum excludes tool-list brackets and provider wrappers. chars/4 is only a heuristic, not model tokenization, system prompt or total conversation usage.",
+      "tools": [
+        {
+          "name": "designer_manage",
+          "chars": 2964,
+          "approxTokens": 741,
+          "outputSchemaReported": false,
+          "sha256": "fefdf90135d70c4b6aa9c81f0c8ed7175a278426ea3b6b05398213d1b8517f8b"
+        },
+        {
+          "name": "designer_import",
+          "chars": 844,
+          "approxTokens": 211,
+          "outputSchemaReported": false,
+          "sha256": "b487f318332a9a815a9ac8f9b7c1ae2c467204a15399d22cacd6886279e4870a"
+        }
+      ],
+      "totals": {
+        "count": 2,
+        "chars": 3808,
+        "approxTokens": 952,
+        "serializedToolArrayChars": 3811
+      }
+    }
+  },
+  "after": null,
+  "comparison": null,
+  "authoredScoped": null,
+  "status": "Baseline captured; awaiting lead confirmation that v0.4 is installed before collecting after."
+}

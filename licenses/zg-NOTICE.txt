@@ -1,0 +1,18 @@
+DeepSeek Harness lightweight zg SDK distribution
+
+Original project: @zvec/zvec-grep 0.2.1
+Copyright holders: the upstream zvec-grep contributors.
+Source: https://github.com/zvec-ai/zvec-grep
+License: Apache License 2.0 (see zg-LICENSE.txt).
+The official npm archive does not include a NOTICE file.
+
+Distribution changes:
+- Bundle the official SDK entrypoint, WorkspaceIndex and workspace-manifest helpers with esbuild-wasm 0.28.2.
+- Replace the optional Transformers.js and llama-cpp backend classes with explicit unsupported errors. No substitute embeddings are generated.
+- Relocate the official Model2Vec worker URL to the separately bundled zg-model2vec-worker.js.
+- Inline official @zvec/zvec 0.7.0 JS wrapper and detect-libc 2.1.2 from verified npm archives; retain their licenses. The install script is not included or executed.
+- Resolve the native wrapper dirname to a fixed virtual upstream 0.7.0 location and use createRequire(import.meta.url) for native optional-package resolution; preserve official platform/libc selection and adjacent jieba dictionary registration.
+- Keep only official precompiled @zvec/bindings-* optional packages, tokenizer, ripgrep and tree-sitter packages external. Tree-sitter WASM stays in its original dependency package.
+- Exclude CLI, MCP servers and installers. Do not run upstream lifecycle scripts.
+
+Internal API notice: WorkspaceIndex/readWorkspaceManifest/workspaceIndexInfoFromManifest are upstream internal APIs pinned to 0.2.1. Their behavior is not rewritten by this distribution.
