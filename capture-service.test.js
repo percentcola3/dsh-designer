@@ -17,8 +17,8 @@ async function response(service,url,method='GET'){const res={writeHead(status,he
 function fixture(){
   const scope=new AsyncLocalStorage(),commands=[],pages=new Map(),settings={formatMismatch:false,shotError:null,content:{width:900,height:1400},imageFailures:0,gate:null},taskCalls=[];
   const user={label:'p-user',closed:false};pages.set(user.label,user);let pageNumber=0;let service;
-  const createPage=()=>{const page={label:'capture-'+(++pageNumber),closed:false,urlValue:'about:blank',async goto(url){this.urlValue=url;const received=await response(service,new URL(url).pathname);assert.equal(received.status,200);assert.match(received.headers['Content-Security-Policy'],/sandbox allow-scripts/);},async url(){return this.urlValue;},async evaluate(fn,args){commands.push({method:'evaluate',args});assert.equal(typeof fn,'function');return {boxes:(args.nodeIds||[]).map(id=>({id,x:10,y:20,width:80,height:90,visible:true})),marked:args.editorMarks?(args.nodeIds.length||1):0,viewport:{width:900,height:700},fontStatus:'loaded',imageFailures:settings.imageFailures,runtime:{present:true,readyState:'complete',scene:args.scene||null}};},async cdp(method,params,options){commands.push({method,params,options});if(method==='Page.getLayoutMetrics')return {cssContentSize:settings.content};if(method==='Page.captureScreenshot'){if(settings.gate)await settings.gate;if(settings.shotError)throw settings.shotError;const bytes=settings.formatMismatch?png:params.format==='jpeg'?jpeg:params.format==='webp'?webp:png;return {data:bytes.toString('base64')};}return {};},async events(){return [];},async close(){this.closed=true;commands.push({method:'close',label:this.label});}};pages.set(page.label,page);return page;};
-  const browser={spaceId:7,spaceName:'one-existing-goal',disposed:false,browsers:new Map([['user-browser',{browserId:'user-browser',projectId:'p-other',label:user.label,spaceId:7}]]),queue:Promise.resolve(),_serial(work){const result=this.queue.then(work);this.queue=result.catch(()=>{});return result;},async _run(source,timeout){await Promise.resolve();assert.equal(scope.getStore(),policy,'every native CLI call must retain exact caller ALS policy');assert.ok(timeout>0&&timeout<=40000);let receipt='';const taskSpace=async id=>{taskCalls.push(id);assert.equal(id,7,'resume the existing task space instead of creating another');return {spaceId:7,page:label=>{const page=pages.get(label);assert.ok(page&&!page.closed,'only operate a live owned Page');return page;},newPage:async()=>createPage()};};const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;await new AsyncFunction('taskSpace','console',source)(taskSpace,{log:value=>{receipt=value;}});return parseCliOutput(receipt);}};
+  const createPage=()=>{const page={label:'capture-'+(++pageNumber),closed:false,urlValue:'about:blank',async goto(url){this.urlValue=url;const received=await response(service,new URL(url).pathname);assert.equal(received.status,200);assert.match(received.headers['Content-Security-Policy'],/sandbox allow-scripts/);},async url(){return this.urlValue;},async evaluate(fn,args){commands.push({method:'evaluate',args});assert.equal(typeof fn,'function');return {boxes:(args.nodeIds||[]).map(id=>({id,x:10,y:20,width:80,height:90,visible:true})),marked:args.editorMarks?(args.nodeIds.length||1):0,viewport:{width:900,height:700},fontStatus:'loaded',imageFailures:settings.imageFailures,runtime:{present:true,readyState:'complete',scene:args.scene||null}};},async cdp(method,params,options){commands.push({method,params,options});if(method==='Page.getLayoutMetrics')return {cssContentSize:settings.content,cssVisualViewport:settings.visualViewport};if(method==='Page.captureScreenshot'){if(settings.gate)await settings.gate;if(settings.shotError)throw settings.shotError;const bytes=settings.formatMismatch?png:params.format==='jpeg'?jpeg:params.format==='webp'?webp:png;return {data:bytes.toString('base64')};}return {};},async events(){return [];},async close(){commands.push({method:'close',label:this.label});if(settings.closeError)throw settings.closeError(this);this.closed=true;}};pages.set(page.label,page);return page;};
+  const browser={spaceId:7,spaceName:'one-existing-goal',disposed:false,browsers:new Map([['user-browser',{browserId:'user-browser',projectId:'p-other',label:user.label,spaceId:7}]]),queue:Promise.resolve(),_serial(work){const result=this.queue.then(work);this.queue=result.catch(()=>{});return result;},async _run(source,timeout){await Promise.resolve();assert.equal(scope.getStore(),policy,'every native CLI call must retain exact caller ALS policy');assert.ok(timeout>0&&timeout<=40000);let receipt='';const taskSpace=async id=>{taskCalls.push(id);assert.equal(id,7,'resume the existing task space instead of creating another');return {spaceId:7,pages:async()=>[...pages.values()].filter(page=>!page.closed),page:label=>{const page=pages.get(label);assert.ok(page&&!page.closed,'only operate a live owned Page');return page;},newPage:async()=>createPage()};};const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;await new AsyncFunction('taskSpace','console',source)(taskSpace,{log:value=>{receipt=value;}});return parseCliOutput(receipt);}};
   const project={id:'p-test',revision:3,artboards:[{id:'a-page',htmlPath:'html/page.html',revision:2,contentHash:sha(html),viewport:{width:900,height:700}}]};let fsReads=0;const owner={ctx:{webServer:{getOrigin:()=> 'http://127.0.0.1:53998'},fs:{readBytes(){fsReads++;assert.fail('finite capability requests must not read Fs');}}},store:{async projectGet(id){assert.equal(id,project.id);return {project};}},imports:{browser,browserScope:scope},delivery:{async snapshot(_project,input,env){assert.equal(input.pageId,'a-page');assert.equal(env.policy,policy);return {pages:project.artboards,files:defaultFiles().map(f=>({...f,bytes:Buffer.from(f.bytesBase64,'base64')}))};}}};
   let now=1000;service=new CaptureService(owner,{now:()=>now});const payload={projectId:'p-test',pageId:'a-page',html,logicalPath:'html/page.html',files:defaultFiles(),viewport:{width:900,height:700},policy};return {service,owner,browser,scope,commands,pages,user,settings,taskCalls,payload,project,get fsReads(){return fsReads;},advance(ms){now+=ms;}};
 }
@@ -50,6 +50,15 @@ test('PNG adapter runs the native script in shared policy scope, forwards presen
   const f=fixture();const result=await f.service.capture({...f.payload,background:false,editorMarks:true,nodeIds:['hero'],scene:'success'});assert.equal(result.mimeType,'image/png');assert.ok(Buffer.from(result.bytesBase64,'base64').equals(png));assert.deepEqual(result.metadata.region,{x:10,y:20,width:80,height:90,scale:1});assert.equal(result.metadata.editorMarkCount,1);assert.equal(result.metadata.runtime.scene,'success');assert.equal(result.metadata.savedSourceHash,sha(html));assert.deepEqual(result.metadata.sourceVersion,{pageRevision:2,sourceHash:sha(html)});assert.notEqual(result.metadata.sourceHtmlHash,result.metadata.savedSourceHash);assert.deepEqual(result.metadata.boundsVersion,{pageRevision:2,sourceHash:sha(html),viewport:result.metadata.requestedViewport,scene:'success'});
   assert.deepEqual(f.commands.find(c=>c.method==='Emulation.setDefaultBackgroundColorOverride').params.color,{r:0,g:0,b:0,a:0});const evaluated=f.commands.find(c=>c.method==='evaluate').args;assert.equal(evaluated.background,false);assert.equal(evaluated.editorMarks,true);assert.deepEqual(evaluated.nodeIds,['hero']);assert.equal(f.commands.find(c=>c.method==='Page.captureScreenshot').params.captureBeyondViewport,true);
   assert.equal(f.user.closed,false);assert.equal(f.browser.browsers.size,1);assert.equal(f.service.pages.size,0);assert.equal(f.service.capabilities.size,0);assert.equal(f.scope.getStore(),undefined);assert.ok(f.taskCalls.every(id=>id===7));
+});
+
+test('live screenshot clips the selected viewport region at the restored scroll offset',async()=>{
+  const f=fixture();
+  f.settings.visualViewport={pageX:0,pageY:410};
+  const payload={projectId:'p-test',pageId:'a-page',viewport:{width:900,height:700},livePreviewHtml:html,scroll:{x:0,y:410},region:{x:22,y:34,width:200,height:35},policy};
+  const result=await f.service.capture(payload);
+  assert.deepEqual(result.metadata.region,{x:22,y:444,width:200,height:35,scale:1});
+  await assert.rejects(f.service.capture({...payload,region:{x:0,y:699,width:10,height:10}}),{code:'INVALID_CAPTURE_REGION'});
 });
 
 test('full-page height beyond 3840 is captured through native CDP bounds without a fake resized image',async()=>{
@@ -95,4 +104,50 @@ test('sandbox and policy denials revoke capture capability without fallback or f
 
 test('dispose revokes pending capabilities and owns no browser-wide finish action',async()=>{
   const f=fixture();f.service.issue(await f.service.prepare(f.payload,{policy,deadline:Date.now()+10000}));await f.service.dispose();assert.equal(f.service.capabilities.size,0);assert.equal(f.user.closed,false);assert.equal(f.browser.browsers.size,1);await assert.rejects(f.service.capture(f.payload),{code:'CAPTURE_DISPOSED'});assert.ok(!f.commands.some(c=>c.method==='finish'));
+});
+
+test('a capture tab close timeout keeps the image and reuses the live owned tab across later scenes',async()=>{
+  const f=fixture();
+  f.settings.closeError=page=>new Error(`page ${page.label} did not close within 2000ms`);
+  for(const scene of ['default','validation','confirm','success']){
+    const captured=await f.service.capture({...f.payload,scene});
+    assert.equal(captured.metadata.runtime.scene,scene);
+    assert.equal(captured.bytesBase64,png.toString('base64'));
+    assert.equal(captured.warnings.at(-1).code,'CAPTURE_PAGE_CLOSE_PENDING');
+    assert.equal(f.service.pages.size,1);
+    assert.equal(f.browser.browsers.size,1);
+    assert.equal(f.service.capabilities.size,0);
+  }
+  assert.equal(f.pages.size,2,'only the original user tab and a single capture tab were allocated');
+  f.settings.closeError=null;
+  const recovered=await f.service.capture(f.payload);
+  assert.deepEqual(recovered.warnings,[]);
+  assert.equal(f.service.pages.size,0);
+  assert.equal(f.user.closed,false);
+});
+
+test('a late close is reconciled before allocating the next capture tab',async()=>{
+  const f=fixture();
+  f.settings.closeError=page=>new Error(`page ${page.label} did not close within 2000ms`);
+  await f.service.capture(f.payload);
+  const [{entry}]=f.service.pages.values();
+  f.pages.get(entry.label).closed=true;
+  f.settings.closeError=null;
+  const image=await f.service.capture(f.payload);
+  assert.equal(image.bytesBase64,png.toString('base64'));
+  assert.equal(f.service.pages.size,0);
+  assert.equal(f.pages.size,3);
+  assert.equal(f.user.closed,false);
+});
+
+test('a render failure survives a concurrent capture tab close timeout',async()=>{
+  const f=fixture();
+  f.settings.closeError=page=>new Error(`page ${page.label} did not close within 2000ms`);
+  f.settings.shotError=Object.assign(new Error('invalid scene'),{code:'CAPTURE_SCENE_UNAVAILABLE'});
+  await assert.rejects(f.service.capture(f.payload),{code:'CAPTURE_SCENE_UNAVAILABLE'});
+  assert.equal(f.service.pages.size,1);
+  f.settings.closeError=null;
+  await f.service.dispose();
+  assert.equal(f.service.pages.size,0);
+  assert.equal(f.user.closed,false);
 });

@@ -1,3 +1,5 @@
+import {createFileTree} from './file-tree.js';
+
 // Text offsets are UTF-16 offsets, matching textarea.selectionStart/End.
 export function detectMention(value, start, end = start) {
   if (typeof value !== 'string' || !Number.isInteger(start) || start < 0 || start > value.length || start !== end) return null;
@@ -45,7 +47,7 @@ export function isAvailable(item) {
     && !item.unavailable && item.available !== false && !['deleted', 'archived', 'unavailable'].includes(item.status);
 }
 
-export function mentionCandidates({variant, projects = [], knowledge = [], projectId, files = [], query = ''}) {
+export function mentionCandidates({variant, projects = [], knowledge = [], projectId, files = [], query = '', kind}) {
   const search = query.trim().toLocaleLowerCase(), seen = new Set();
   const matches = item => [item.name, item.label, item.path].some(value => String(value || '').toLocaleLowerCase().includes(search));
   const others = projects.filter(p => {
@@ -54,16 +56,33 @@ export function mentionCandidates({variant, projects = [], knowledge = [], proje
     if (!Number.isSafeInteger(p.revision) || p.revision < 1) return false;
     seen.add(`p:${p.id}`); return true;
   }).map(project => ({kind: 'project', key: `project:${project.id}`, item: project}));
-  const walk = (entries, parent = '') => entries.flatMap(file => {
+  const walk = (entries, parent = '', parentSource = {}) => entries.flatMap(file => {
     if (!isAvailable(file)) return [];
     const path = file.path || [parent, file.name].filter(Boolean).join('/');
-    const item = {...file, path}, id = file.id || file.fileId;
-    const directory = file.type === 'directory' || file.kind === 'directory' || file.isDirectory || Array.isArray(file.children);
-    const key = JSON.stringify(['file', file.sourceId || '', id]);
+    const item = {...parentSource, ...file, path}, id = file.id || file.fileId;
+    const directory = file.entryType === 'directory' || file.type === 'directory' || file.kind === 'directory' || file.isDirectory || Array.isArray(file.children);
+    const key = JSON.stringify(['file', item.sourceId || '', id]);
     const include = id && !directory && matches(item) && !seen.has(key);
     if (include) seen.add(key);
-    return [...(include ? [{kind: 'file', key, item}] : []), ...walk(file.children || [], path)];
+    return [...(include ? [{kind: 'file', key, item}] : []), ...walk(file.children || [], path, {sourceId:item.sourceId,sourceName:item.sourceName})];
   });
   const libraries=variant==='canvas'&&projectId?knowledge.filter(item=>item?.id&&isAvailable(item)&&matches(item)&&!seen.has(`k:${item.id}`)&&seen.add(`k:${item.id}`)).map(item=>({kind:'knowledge',key:`knowledge:${item.id}`,item})):[];
-  return [...others, ...libraries, ...(variant === 'canvas' && projectId ? walk(files) : [])];
+  const candidates = [...others, ...libraries, ...(variant === 'canvas' && projectId ? walk(files) : [])];
+  return kind ? candidates.filter(candidate => candidate.kind === kind) : candidates;
+}
+
+// Only files that already qualify for references become leaves in the picker.
+export function mentionFileRows(candidates, expansion, searching) {
+  const roots = createFileTree(candidates.map(candidate => candidate.item));
+  const rows = [];
+  function visit(nodes, level) {
+    for (const node of nodes) {
+      const folder = node.kind !== 'file';
+      const expanded = folder && (expansion[node.id] ?? (searching || level <= 2));
+      rows.push({kind:folder ? 'folder' : 'file', key:node.id, item:node.file, node, level, expanded});
+      if (expanded) visit(node.children, level + 1);
+    }
+  }
+  visit(roots, 1);
+  return rows;
 }

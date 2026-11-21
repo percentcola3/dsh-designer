@@ -84,6 +84,14 @@ test('scoped assets and bindings never inspect sibling Design metadata or live s
   assert.ok(!JSON.stringify(report).includes('sibling'));
 });
 
+test('resource-backed pinned tokens and rules are recognized without reading their contents',async()=>{
+  const f=fixture();
+  f.task.effectiveBindingsByDesign={'d-one':{systemId:'d-system',version:3,system:{resources:[{logicalPath:'tokens.json',id:'tokens'},{logicalPath:'rule.md',id:'rules'}]}}};
+  const report=await f.service.execute({action:'diagnostics.run',categories:['assets']},{task:f.task,policy});
+  assert.equal(check(report,'assets.tokens').status,'pass');assert.equal(check(report,'assets.guidelines').status,'pass');
+  assert.equal(report.limits.fileContentsInspected,false);assert.deepEqual(f.calls,[['project','p-one']]);
+});
+
 test('task knowledge uses only exact admitted refs and frozen summaries, never live library enumeration', async () => {
   const f = fixture();
   const ref = {type: 'knowledge', projectId: 'p-one', knowledgeId: 'k-one', resourceId: 'knowledge:k-one', sourceVersion: 3, readonly: true};

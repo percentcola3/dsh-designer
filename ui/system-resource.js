@@ -47,11 +47,30 @@ export async function readSystemResource(api,args) {
   const value=await api('system.resource.read',args);
   const resource={...value,logicalPath:value.logicalPath||value.resource?.logicalPath,path:value.logicalPath||value.resource?.logicalPath||value.resource?.path,readonly:true,binary:!isTextSystemResource(value)};
   if(!isTextSystemResource(resource)||typeof resource.content==='string'||typeof resource.text==='string')return resource;
+  return {...resource,content:await (await fetchSystemResource(resource)).text()};
+}
+
+async function fetchSystemResource(resource) {
   const address=resource.downloadUrl||resource.previewUrl||resource.url;
   if(!address)throw Object.assign(new Error('此固定版本资源没有可读取的正文地址'),{code:'SYSTEM_RESOURCE_BODY_UNAVAILABLE'});
   const url=new URL(address,location.origin);
-  if(url.origin!==location.origin)throw Object.assign(new Error('资源正文地址不是受控的本地能力地址'),{code:'SYSTEM_RESOURCE_SCOPE'});
-  const response=await fetch(url.href,{credentials:'same-origin'});
+  const nativeResource=location.protocol==='dsh-app:'&&url.protocol==='http:'&&['127.0.0.1','localhost','[::1]'].includes(url.hostname)&&url.pathname.startsWith('/api/designer/file-resource/');
+  if(url.origin!==location.origin&&!nativeResource)throw Object.assign(new Error('资源正文地址不是受控的本地能力地址'),{code:'SYSTEM_RESOURCE_SCOPE'});
+  const response=await fetch(nativeResource?url.pathname+url.search:url.href,{credentials:'same-origin'});
   if(!response.ok)throw Object.assign(new Error('读取固定版本资源正文失败：HTTP '+response.status),{code:'SYSTEM_RESOURCE_READ_FAILED'});
-  return {...resource,content:await response.text()};
+  return response;
+}
+
+export async function readSystemResourceBytes(api,args) {
+  const resource=await api('system.resource.read',args);
+  const bytes=resource.bytesBase64!==undefined?Uint8Array.from(atob(resource.bytesBase64),char=>char.charCodeAt(0))
+    :resource.content!==undefined?new TextEncoder().encode(resource.content)
+    :new Uint8Array(await (await fetchSystemResource(resource)).arrayBuffer());
+  return {...resource,bytes};
+}
+
+export function systemBytesBase64(bytes) {
+  const chunks=[];
+  for(let offset=0;offset<bytes.length;offset+=8192)chunks.push(String.fromCharCode(...bytes.subarray(offset,offset+8192)));
+  return btoa(chunks.join(''));
 }

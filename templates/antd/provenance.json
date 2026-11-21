@@ -1,0 +1,27 @@
+{
+  "upstream": "https://github.com/ant-design/ant-design",
+  "antd": "6.7.0",
+  "extractor": "2.1.0",
+  "theme": {
+    "hashed": false,
+    "cssVar": {
+      "key": "dsh-antd"
+    }
+  },
+  "extraction": "theme.getDesignToken(), lib/theme/themes/seed.js, official extractStyle(), dist/reset.css, React SSR sample",
+  "tokenCount": 536,
+  "inputs": {
+    "antd/lib/theme/themes/seed.js": "3d07e9e46aff0bc3d74dfaea806b9754c5930e19599db3742f0f1c93dd34dfa8",
+    "antd/lib/theme/getDesignToken.js": "96e8ee28326d7f142775b38d725cb82467b18cb7dcf50614035f20284e4be472",
+    "antd/dist/reset.css": "89ff6ee11a65c95b146579ba0168836d5b0e4e781ab88c0914da8e7628a3f023"
+  },
+  "outputs": {
+    "tokens.json": "3dbfd0b8e2fb26796e35878dae10ce09bbb24dbf3a43194308c63e3858b3ec66",
+    "seed.json": "f337cae036a55e2ab304b96913059e7e7741f7301cac2121f6d7196e03313d2d",
+    "css/tokens.css": "4526b4bf2d4e045aa769a1d7b19b55a725933547f05ba64a7f62c848df8f5496",
+    "css/antd.css": "88cfcc22dad6393349610c11035e563a48893c4557dc281b9250561aabaed155",
+    "css/reset.css": "89ff6ee11a65c95b146579ba0168836d5b0e4e781ab88c0914da8e7628a3f023",
+    "assets/LICENSE.txt": "3c82654bb472ebbcacc4c1ff00f94aa8c60c4b7ee011b16bafcbacecc3703458",
+    "examples/components.html": "dd52534c2f806ae83fe7633d6d0039655918ad1308271af39a3673685deaf213"
+  }
+}

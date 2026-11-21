@@ -18,13 +18,30 @@ class MemoryFS {
 function fixture(){
   const fs=new MemoryFS(),agents=new Map(),modes=new Map(),creates=[],effects=[],restores=[],resolves=[];
   const policy={mode:'workspace-write',workspaceRoot:'/workspace'},selection={provider:'stub',model:'never-called'};
-  const ctx={fs,connection:{},sandboxPolicy:{workspaceRoot:'/workspace',resolve:({session}={})=>({...policy,...(session?{mode:modes.get(session.id)||'read-only',workspaceRoot:session.header.cwd}:{})})},agentDefaultModel:{currentSelection:()=>selection},tools:{schemas:()=>[{name:'shell'},{name:'designer_manage'}]},effect(start){const off=start();effects.push(off);return off;},
+  const ctx={fs,connection:{},sandboxPolicy:{workspaceRoot:'/workspace',resolve:({session}={})=>({...policy,...(session?{mode:modes.get(session.id)||'read-only',workspaceRoot:session.header.cwd}:{})})},agentDefaultModel:{currentSelection:()=>selection},tools:{schemas:()=>[{name:'shell'},{name:'designer_manage'},{name:'ask_user_question'}]},effect(start){const off=start();effects.push(off);return off;},
     agents:{get:id=>agents.get(id),list:()=>[...agents.values()],async create(options){creates.push(options);options.signal?.throwIfAborted();const events=[],scoped=new Map(),guards=[],restrictions=[],session={id:options.sessionId,header:{cwd:options.meta.cwd},snapshotEvents:()=>events.slice(),append(type,data){events.push({type,data});if(type==='sandbox/mode')modes.set(options.sessionId,data.mode);}},agent={id:options.sessionId,session,scoped,guards,restrictions,events,ctx:{tools:{register(def){scoped.set(def.name,def);return()=>scoped.delete(def.name);},guard(fn){guards.push(fn);return()=>{};},restrict(input){restrictions.push(input);return()=>{};}},systemPrompt:{section:()=>()=>{}},effect(start){effects.push(start());}}};agents.set(agent.id,agent);await options.setup?.(agent.ctx,agent);return {agent,dispose:()=>agents.delete(agent.id)};}},
     sessionController:{async resolveAgent(id){resolves.push(id);return agents.has(id)?{agent:agents.get(id)}:{error:Object.assign(Error('No session'),{code:'session/not-found'})};},prompt(){throw Error('Composer must never prompt a model');}},
   };
   const owner=new DesignerService(ctx,{workspaceRoot:'/workspace'});owner.designerPreset='minimal';owner.restoreAgent=async(agent,p)=>{restores.push({agent,p});};const composer=new ComposerService(owner);owner.composer=composer;
   return {owner,composer,ctx,fs,agents,modes,creates,effects,restores,resolves,policy,selection,env:{user:true,policy},async project(){return owner.store.projectCreate({name:'Existing project'},undefined,policy);}};
 }
+
+test('saved minimal sessions receive the real native question tool with exact Agent ownership',async()=>{
+  const f=fixture(),project=await f.project(),requests=[];
+  f.ctx.tools.schemas=agent=>agent?[...agent.scoped.values()]:[{name:'shell'}];
+  f.ctx.userQuestions={async ask(request){requests.push(request);return {answers:[{id:'color',selected:['蓝色']}]};}};
+  const prepared=await f.composer.prepare({projectId:project.id},f.env),agent=f.agents.get(prepared.sessionId);
+  const tool=agent.scoped.get('ask_user_question'),signal=new AbortController().signal;
+  assert.ok(tool);
+  const value=await tool.execute({questions:[{id:'color',question:'选择测试颜色',options:[{label:'蓝色'},{label:'绿色'}]}]}, {agent,signal,callId:'color-call'});
+  assert.deepEqual(value,{answers:[{id:'color',selected:['蓝色']}]});
+  assert.equal(requests[0].agent,agent);
+  assert.equal(requests[0].signal,signal);
+  assert.deepEqual(requests[0].wait,{callId:'color-call'});
+  assert.deepEqual(requests[0].questions[0].options,[{label:'蓝色'},{label:'绿色'}]);
+  f.owner.dispose();
+  assert.equal(agent.scoped.has('ask_user_question'),false);
+});
 
 test('homepage prepare creates an ordinary real native session with controlled physical cwd, preset and selection only',async()=>{
   const f=fixture(),before=f.fs.writes.length;f.fs.alias='/physical/library';
@@ -66,7 +83,7 @@ test('adopt persists the same native session, installs only existing scoped tool
   const f=fixture(),p=await f.project(),prepared=await f.composer.prepare({},f.env),agent=(await f.composer.resolve(prepared.sessionId,f.env)).agent,cwd=agent.session.header.cwd;
   const result=await f.composer.adopt({projectId:p.id,sessionId:prepared.sessionId,expectedRevision:p.revision},f.env);
   assert.equal(result.project.aiSessionId,prepared.sessionId);assert.equal(result.projectRevision,p.revision+1);assert.equal(f.owner.bindings.get(prepared.sessionId),p.id);assert.equal(agent.session.header.cwd,cwd);assert.equal(f.creates.length,1);
-  assert.deepEqual([...agent.scoped.keys()],['designer_project','designer_commit_html','designer_workbench']);assert.ok(agent.guards[0]({name:'shell'}));assert.ok(agent.restrictions[0].deny.includes('shell'));assert.equal(agent.events.length,1);assert.equal(f.restores.at(-1).p.aiSessionId,prepared.sessionId);
+  assert.deepEqual([...agent.scoped.keys()],['designer_project','designer_commit_html','designer_workbench']);assert.ok(agent.guards[0]({name:'shell'}));assert.ok(agent.restrictions[0].deny.includes('shell'));assert.equal(agent.guards[0]({name:'ask_user_question'}),undefined);assert.equal(agent.restrictions[0].deny.includes('ask_user_question'),false);assert.equal(agent.events.length,1);assert.equal(f.restores.at(-1).p.aiSessionId,prepared.sessionId);
   const before=f.fs.writes.length,retry=await f.composer.adopt({projectId:p.id,sessionId:prepared.sessionId,expectedRevision:p.revision},f.env);assert.equal(retry.projectRevision,result.projectRevision);assert.equal(retry.sessionId,result.sessionId);assert.equal(retry.project.aiSessionId,result.project.aiSessionId);assert.equal(f.fs.writes.length,before);
   assert.equal((await f.composer.resolve(prepared.sessionId,f.env)).agent,agent);f.composer.dispose();f.owner.composer=new ComposerService(f.owner);
   assert.deepEqual(await f.owner.composer.adopt({projectId:p.id,sessionId:prepared.sessionId,expectedRevision:p.revision},f.env),retry);assert.equal(f.fs.writes.length,before);assert.equal(f.creates.length,1);

@@ -42,3 +42,30 @@ test('Unicode paths resolve exactly and external origins cannot become package p
  assert.equal(systemLogicalPath('示例/页面.md','../图片/图%20标.svg#view'),'图片/图 标.svg');
  assert.throws(()=>systemLogicalPath('index.md','https://other.invalid/private.png'),error=>error.code==='SYSTEM_RESOURCE_SCOPE');
 });
+
+test('desktop system text reads route exact local capability through native bridge and reject external origins', async () => {
+ const oldLocation=globalThis.location, oldFetch=globalThis.fetch;
+ try {
+  globalThis.location={protocol:'dsh-app:',origin:'dsh-app://app'};
+  let requested;
+  globalThis.fetch=async(url,options)=>{requested={url,options};return {ok:true,text:async()=> '# Saved rule'};};
+  const api=async()=>({mimeType:'text/markdown',logicalPath:'rule.md',downloadUrl:'http://127.0.0.1:5000/api/designer/file-resource/cap/rule.md?download=1'});
+  const result=await readSystemResource(api,{systemId:'s',version:1,resourceId:'r'});
+  assert.equal(result.content,'# Saved rule');
+  assert.equal(requested.url,'/api/designer/file-resource/cap/rule.md?download=1');
+  assert.equal(requested.options.credentials,'same-origin');
+  for(const address of ['https://foreign.test/api/designer/file-resource/cap/rule.md','http://localhost:5000/private'])await assert.rejects(readSystemResource(async()=>({mimeType:'text/plain',downloadUrl:address}),{}),{code:'SYSTEM_RESOURCE_SCOPE'});
+ } finally {globalThis.location=oldLocation;globalThis.fetch=oldFetch;}
+});
+
+test('directory downloads preserve binary bytes from metadata-only capabilities', async () => {
+ const {readSystemResourceBytes}=await import('./system-resource.js');
+ const oldLocation=globalThis.location,oldFetch=globalThis.fetch;
+ try {
+  globalThis.location={protocol:'dsh-app:',origin:'dsh-app://app'};
+  const bytes=Uint8Array.of(0,255,128,1);
+  globalThis.fetch=async()=>({ok:true,arrayBuffer:async()=>bytes.buffer});
+  const loaded=await readSystemResourceBytes(async()=>({mimeType:'image/png',downloadUrl:'http://127.0.0.1:5000/api/designer/file-resource/cap/image.png?download=1'}),{systemId:'s',version:1,resourceId:'r'});
+  assert.deepEqual(loaded.bytes,bytes);
+ } finally {globalThis.location=oldLocation;globalThis.fetch=oldFetch;}
+});

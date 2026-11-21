@@ -241,11 +241,12 @@ export class DesignerStore {
     return record;
   }
   async projectGet(projectId, signal) { const { value:project } = await this.projectRecord(projectId, signal); return { project,artboards:project.artboards,history:project.history }; }
-  async projectCreate(input, signal, policy) {
+  async projectCreate(input, signal, policy, {deferHistory=false} = {}) {
     const stamp = now();
     const groupId = await this.groupId(input.groupId,signal);
     const project = { schemaVersion:1,id:uid('p'),revision:1,groupId,deletedAt:null,name:text(input.name,'name'),description:text(input.description ?? '','description',4000,true),platform:platform(input.platform),skillNames:[],skillContextSessionId:input.skillContextSessionId || null,systemId:null,systemVersion:null,canvas:canvas(),artboards:[],history:[],aiSessionId:null,archived:false,createdAt:stamp,updatedAt:stamp };
     await this.write(`projects/${project.id}/project.json`, json(project), null, signal, policy);
+    if(!deferHistory)await this.onPublish?.(project,{signal,policy:policy||this.policy(),summary:'Create design project'});
     return project;
   }
   async mutate(projectId, expectedRevision, summary, change, signal, policy, snapshot = true, allowDeleted = false, beforePublish) {
@@ -264,6 +265,7 @@ export class DesignerStore {
     await beforePublish?.();
     next.revision = before.revision + 1; next.updatedAt = now();
     await this.write(`projects/${before.id}/project.json`, json(next), record.version, signal, policy);
+    await this.onPublish?.(next,{signal,policy:policy||this.policy(),summary});
     return next;
   }
   async projectUpdate(input, signal, policy) {
@@ -278,10 +280,7 @@ export class DesignerStore {
       }
       if (input.systemId !== undefined) {
         if (input.systemId === null || input.systemId === '') { p.systemId = null; p.systemVersion = null; }
-        else { const s = await this.systemGet(input.systemId,signal); p.systemId = s.id; p.systemVersion = input.systemVersion ?? s.revision; if (!s.versions.some(v => v.version === p.systemVersion)) fail('NOT_FOUND','Design system version was not found'); }
-      } else if (input.systemVersion !== undefined) {
-        if (!p.systemId) fail('INVALID_INPUT','Select a design system first');
-        const s = await this.systemGet(p.systemId,signal); if (!s.versions.some(v => v.version === input.systemVersion)) fail('NOT_FOUND','Design system version was not found'); p.systemVersion = input.systemVersion;
+        else { const s = await this.systemGet(input.systemId,signal); p.systemId = s.id; p.systemVersion = s.revision; }
       }
     },signal,policy,false);
   }
@@ -392,7 +391,33 @@ export class DesignerStore {
     const system = { schemaVersion:1,id:uid('d'),name:text(input.name,'name'),description:text(input.description ?? '','description',4000,true),platforms:platforms(input.platforms),archived:false,revision:1,versions:[data],createdAt:stamp,updatedAt:stamp };
     await this.write(`systems/${system.id}/system.json`,json(system),null,signal,policy); return system;
   }
-  async systemGet(systemId,signal) { const { value:s } = await this.readJSON(`systems/${id(systemId)}/system.json`,signal); if (s.id !== systemId || s.schemaVersion !== 1) fail('INVALID_DOCUMENT','Invalid design system'); return s; }
+  async systemGet(systemId,signal,revision) {
+    const base = `systems/${id(systemId)}`;
+    const {value:system} = await this.readJSON(base+'/system.json',signal);
+    if (system.id !== systemId || system.schemaVersion !== 1) fail('INVALID_DOCUMENT','Invalid design system');
+    let snapshot = revision === undefined ? system.versions.at(-1) : system.versions.find(item => item.version === revision);
+    if (!snapshot && Number.isSafeInteger(revision) && revision > 0 && revision < system.revision) {
+      const saved = await this.read(base+'/snapshots/'+revision+'.json',signal,true);
+      if (saved) snapshot = JSON.parse(saved.content);
+    }
+    return {...system,versions:snapshot ? [snapshot] : []};
+  }
+  async publishSystem(system,previous,signal,policy) {
+    // Resource grants and running tasks may still refer to the previous content.
+    const base = `systems/${id(system.id)}`;
+    const current = {...system,versions:system.versions.slice(-1)};
+    const content = json(current);
+    if (Buffer.byteLength(content)>4_000_000) fail('TOO_LARGE','System metadata exceeds its readable bound');
+    for (const item of system.versions.slice(0,-1)) {
+      const relative = base+'/snapshots/'+item.version+'.json', bytes = json(item);
+      try { await this.write(relative,bytes,null,signal,policy); }
+      catch (error) {
+        if (error.code !== 'VERSION_CONFLICT' || (await this.read(relative,signal,true))?.content !== bytes) throw error;
+      }
+    }
+    await this.write(base+'/system.json',content,previous,signal,policy);
+    return current;
+  }
   async systemSave(input,signal,policy) {
     const record = await this.readJSON(`systems/${id(input.systemId)}/system.json`,signal); const s = record.value; revision(input.expectedRevision,s.revision);
     const previous = s.versions.at(-1); const stamp = now();
@@ -400,9 +425,8 @@ export class DesignerStore {
     if (input.description !== undefined) s.description = text(input.description,'description',4000,true);
     if (input.platforms !== undefined) s.platforms = platforms(input.platforms);
     if (input.archived !== undefined) {if (typeof input.archived !== 'boolean') fail('INVALID_INPUT','archived must be boolean');s.archived = input.archived;}
-    if (s.versions.length >= 100) fail('LIMIT_REACHED','A design system supports up to 100 versions');
     s.revision++; s.updatedAt = stamp;
     s.versions.push({...clone(previous),version:s.revision,tokens:tokens(input.tokens ?? previous.tokens),guidelines:text(input.guidelines ?? previous.guidelines,'guidelines',30000,true),summary:text(input.summary || 'Update design system','summary',500),createdAt:stamp});
-    await this.write(`systems/${s.id}/system.json`,json(s),record.version,signal,policy); return s;
+    return this.publishSystem(s,record.version,signal,policy);
   }
 }

@@ -16,7 +16,7 @@ export function PlantLogo({ size = 28, className = '', ...props }) {
       <rect width="1254" height="1254" fill="var(--wb-logo-bg,#FFFFFF)" />
       <path
         transform="translate(-8 21)"
-        fill="var(--wb-logo-ink,#7953CD)"
+        fill="var(--wb-logo-ink,#1744F4)"
         fillRule="evenodd"
         d="M 891 192
           C 895 188 900 190 900 197
@@ -48,6 +48,21 @@ export function PlantLogo({ size = 28, className = '', ...props }) {
 }
 
 const iconShapes = {
+  monitor: <><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M12 17v3m-4 0h8"/></>,
+  phone: <><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18.5h2"/></>,
+  upload: <><path d="M12 16V3m-5 5 5-5 5 5M4 15v5h16v-5"/></>,
+  download: <><path d="M12 3v13m-5-5 5 5 5-5M4 17v4h16v-4"/></>,
+  pause: <><path d="M8 5v14M16 5v14" strokeWidth="2.5"/></>,
+  play: <path d="M8 4.5a1 1 0 0 1 1.5-.86l11 6.5a1 1 0 0 1 0 1.72l-11 6.5A1 1 0 0 1 8 17.5Z"/>,
+  pencil: <><path d="m15 4 5 5M4 20l4-1L20 7a2.1 2.1 0 0 0-3-3L5 16l-1 4Z"/></>,
+  eye: <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></>,
+  'eye-off': <><path d="m3 3 18 18M10.5 5.1A11 11 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3 3.8M6.2 6.2A18 18 0 0 0 2 12s3.5 7 10 7a11 11 0 0 0 5.8-1.8M10 10a3 3 0 0 0 4 4"/></>,
+  unlock: <><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V6a4 4 0 0 1 7.7-1.5"/></>,
+  camera: <><path d="M3 7h4l2-3h6l2 3h4v13H3z"/><circle cx="12" cy="13" r="3.5"/></>,
+  lock: <><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V6a4 4 0 0 1 8 0v4"/></>,
+  grip: <><circle cx="9" cy="5" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="19" r="1"/></>,
+  'layout-sidebar': <><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M15 3v18"/></>,
+  'layout-dock': <><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 15h18"/></>,
   copy: <><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></>,
   cursor: <><path d="m4 3 6.6 17 2.3-7.1L20 10.6 4 3Z"/><path d="m13 13 6 6"/></>,
   hand: <path d="M8 13V6a2 2 0 0 1 4 0v6-8a2 2 0 0 1 4 0v8-6a2 2 0 0 1 4 0v8c0 5-3 8-7 8-3 0-5-2-7-5l-3-4a2 2 0 0 1 3-2l2 2Z"/>,
@@ -77,14 +92,19 @@ const iconShapes = {
   sparkles: <><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3ZM20 2v4M18 4h4M4 18v4M2 20h4" /></>,
   layers: <><path d="m12 3 10 5-10 5L2 8l10-5ZM2 12l10 5 10-5M2 16l10 5 10-5" /></>,
   book: <><path d="M12 5v16M12 5C9 3 5 3 2 4v15c3-1 7-1 10 2 3-3 7-3 10-2V4c-3-1-7-1-10 1Z" /></>,
+  knowledge: <><path d="M6 3h13v18H6a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3ZM3 18a3 3 0 0 1 3-3h13"/><path d="M8 7h7M8 10h5"/></>,
+  skill: <path d="M10 4V3a2 2 0 0 1 4 0v1h6v6h1a2 2 0 0 1 0 4h-1v6h-6v-1a2 2 0 0 0-4 0v1H4v-6h1a2 2 0 0 0 0-4H4V4Z"/>,
   library: <><rect x="3" y="3" width="4" height="18" rx="1"/><rect x="7" y="3" width="5" height="18" rx="1"/><path d="m15 3 4-1 4 18-4 1-4-18ZM3 7h9M3 17h9"/></>,
   file: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6Z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></>,
+  'file-pen': <><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="m18 2 4 4-10 10-5 1 1-5L18 2ZM15 5l4 4"/></>,
+  'browser-copy': <><path d="M16 5V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h1"/><rect x="7" y="8" width="15" height="13" rx="2"/><path d="M7 12h15"/></>,
   git: <><circle cx="7" cy="5" r="2"/><circle cx="7" cy="19" r="2"/><circle cx="18" cy="6" r="2"/><path d="M7 7v10m2-3h3a6 6 0 0 0 6-6"/></>,
   settings: <><path d="m9 3-.7 2.6-2 .9L3.8 6l-2 3.5 1.8 1.9v2.2l-1.8 1.9 2 3.5 2.5-.5 2 .9L9 22h6l.7-2.6 2-.9 2.5.5 2-3.5-1.8-1.9v-2.2l1.8-1.9-2-3.5-2.5.5-2-.9L15 3H9Z" /><circle cx="12" cy="12.5" r="3" /></>,
   'arrow-right': <path d="M4 12h16m-7-7 7 7-7 7" />,
   menu: <path d="M4 6h16M4 12h16M4 18h16" />,
   'chevron-right': <path d="m9 5 7 7-7 7" />,
   'chevron-down': <path d="m5 9 7 7 7-7" />,
+  'chevron-up': <path d="m5 15 7-7 7 7" />,
   archive: <><rect x="3" y="3" width="18" height="5" rx="1" /><path d="M5 8v13h14V8M10 12h4" /></>,
   check: <path d="m5 12 4 4L19 6" />,
   leaf: <><path d="M20 3c-6 0-13 1-15 7-2 6 3 10 8 8 6-2 7-9 7-15Z" /><path d="M3 21 15 9" /></>,

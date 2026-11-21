@@ -1,8 +1,9 @@
 import React from 'react';
-import {Button,ErrorBox,downloadValue} from './common.jsx';
+import {Button,ErrorBox,useDownload} from './common.jsx';
 import {copyExportToClipboard} from './export-clipboard.js';
 
 export default function DeliveryPanel({api,project,design,pages,onChanged}) {
+  const downloadValue=useDownload();
   const [format,setFormat]=React.useState('zip'),[scope,setScope]=React.useState('design'),[pageIds,setPageIds]=React.useState([]),[background,setBackground]=React.useState('transparent'),[marks,setMarks]=React.useState(false);
   const [exports,setExports]=React.useState([]),[packages,setPackages]=React.useState([]),[shares,setShares]=React.useState([]),[selectedExport,setSelectedExport]=React.useState(''),[access,setAccess]=React.useState('local-link');
   const [result,setResult]=React.useState(null),[notice,setNotice]=React.useState(''),[error,setError]=React.useState(null),[busy,setBusy]=React.useState(false),[revision,setRevision]=React.useState(project.revision),[confirm,setConfirm]=React.useState(null);
@@ -16,8 +17,9 @@ export default function DeliveryPanel({api,project,design,pages,onChanged}) {
   const selectedPages=pages.filter(p=>scope==='project'||scope==='design'&&(p.designId===design?.id||design?.pageIds?.includes(p.id))||scope==='pages'&&pageIds.includes(p.id));
   const selection=scope==='design'?{designId:design?.id}:scope==='pages'?{pageIds}:{};
   const create=async()=>{const r=await work('export.create',{expectedRevision:revision,...selection,format,background,editorMarks:marks,expectedPageRevisions:Object.fromEntries(selectedPages.map(p=>[p.id,p.revision]))});if(r?.export){setExports(e=>[r.export,...e]);setSelectedExport(r.export.id);}};
-  const createPackage=async()=>{const r=await work('package.create',{expectedRevision:revision});if(r?.package){setPackages(p=>[r.package,...p]);try{downloadValue(r.package);}catch(error){setError(error);}}};
-  const download=async(item,isPackage=false)=>run(async()=>{const r=await call(isPackage?'package.get':'export.get',{exportId:item.id});downloadValue(r.package||r.export||r,item.name||item.id);return r;});
+  const saveDownload=async(value,name)=>{const saved=await downloadValue(value,name);if(saved?.status==='saved')setNotice('已保存到 '+saved.path);else if(saved?.status==='requested')setNotice('已发起下载，请查看浏览器下载记录。');return saved;};
+  const createPackage=async()=>{const r=await work('package.create',{expectedRevision:revision});if(r?.package){setPackages(p=>[r.package,...p]);try{await saveDownload(r.package);}catch(error){setError(error);}}};
+  const download=async(item,isPackage=false)=>run(async()=>{const r=await call(isPackage?'package.get':'export.get',{exportId:item.id});await saveDownload(r.package||r.export||r,item.name||item.id);return r;});
   const copy=async(kind,args={})=>run(async()=>{const payload=await call('package.clipboard',{kind,expectedRevision:revision,...args});await copyExportToClipboard(payload);if(owner.current===project.id)setNotice(kind==='project'?'已复制完整项目的便携文本编码，可粘贴保存。':kind==='png'?'已将实际 PNG 图片复制到剪贴板。':'已复制完整 HTML 源码。');return null;});
   const share=async()=>{const r=await work('share.create',{expectedRevision:revision,exportId:selectedExport,scope:access,hosting:'local'});if(r?.share){setShares(s=>[r.share,...s]);setConfirm(null);}};
   const revoke=async item=>{const r=await work('share.revoke',{expectedRevision:revision,shareId:item.id,expectedShareRevision:item.revision});if(r?.share)setShares(s=>s.map(x=>x.id===r.share.id?r.share:x));};
@@ -25,7 +27,7 @@ export default function DeliveryPanel({api,project,design,pages,onChanged}) {
     <p className="wb-muted">导出使用已保存的有效版本。分享固定到一次导出，后续草稿不会改变分享内容。</p>
     <section className="wb-stack wb-message">
       <h3>完整项目保存</h3>
-      <p className="wb-muted">保存所有设计稿、原始页面模型、项目公开资源、需求规范与固定版本设计体系。包可用于项目迁移和云同步。</p>
+      <p className="wb-muted">保存所有设计稿、原始页面模型、项目公开资源、需求规范与设计规范。包可用于项目迁移和云同步。</p>
       <div className="wb-row" style={{flexWrap:'wrap'}}><Button primary disabled={busy} onClick={createPackage}>保存完整项目 ZIP</Button><Button disabled={busy} onClick={()=>copy('project')}>复制完整项目便携文本</Button></div>
       <p className="wb-muted">剪贴板复制带标记的完整便携文本编码，含实际文件内容。ZIP 文件请使用下载；浏览器剪贴板不提供系统 ZIP 文件对象。</p>
       {packages.map(item=><div className="wb-row" key={item.id} style={{flexWrap:'wrap'}}><span className="wb-grow">{item.name||item.id} · {Math.ceil((item.byteLength||0)/1024)} KiB</span><Button disabled={busy} onClick={()=>download(item,true)}>下载 ZIP</Button><Button disabled={busy} onClick={()=>copy('project',{exportId:item.id})}>复制此版本内容</Button></div>)}

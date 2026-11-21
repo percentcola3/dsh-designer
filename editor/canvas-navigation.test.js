@@ -31,3 +31,10 @@ test('two touch points combine midpoint translation with anchored zoom',()=>{
 test('grid translates and scales in the same coordinate system as artboards',()=>{
   assert.deepEqual(cameraGrid({x:31,y:-12,zoom:.5}),{backgroundPosition:'31px -12px',backgroundSize:'24px 24px'});
 });
+
+test('the single-page canvas pans with a mouse wheel and reserves pinch for zoom',()=>{
+  const camera={x:100,y:200,zoom:.65};
+  assert.deepEqual(wheelNavigation(camera,event({deltaY:120}),rect,true),{...camera,y:80});
+  assert.deepEqual(wheelNavigation(camera,event({deltaY:120,shiftKey:true}),rect,true),{...camera,x:-20});
+  assert.ok(wheelNavigation(camera,event({deltaY:120,ctrlKey:true}),rect,true).zoom<camera.zoom);
+});

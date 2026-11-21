@@ -20,6 +20,26 @@ export function needsAIStatusPolling(state = {}) {
   return isAIRequestActive(state);
 }
 
+export function compactConversationMessages(messages = []) {
+  return messages.filter(message => ['user', 'assistant'].includes(message.role))
+    .slice(-4).map(message => ({...message, text: compactMessageText(message, 320)}));
+}
+
+function compactMessageText(message, limit) {
+  const value = typeof message.text === 'string' ? message.text : typeof message.content === 'string' ? message.content : '';
+  const text = value.replace(/\s+/g, ' ').trim();
+  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
+
+export function latestAIActivity(state = {}) {
+  const messages = state.messages || [];
+  const userIndex = messages.findLastIndex(message => message.role === 'user');
+  const requestId = state.request?.requestId;
+  if (userIndex < 0 || requestId && messages[userIndex].requestId !== requestId) return '';
+  const latest = messages.slice(userIndex + 1).findLast(message => message.role === 'assistant' && compactMessageText(message, 240));
+  return latest ? compactMessageText(latest, 240) : '';
+}
+
 function sourceOutputDetail(record) {
   const saved = new Set(record.savedPageIds || record.savedPages?.map(page => page.pageId) || []).size;
   if (record.outputStatus === 'none' || !saved) return '尚无保存结果';

@@ -32,3 +32,9 @@ test('invalid preparation cannot send a mutation or retain a rejected library ad
  const calls=[],call=createWorkbenchApi(async(action,args)=>{calls.push(action);return {sessionId:'foreign'};});
  await assert.rejects(call('system.create',{}),{code:'LIBRARY_SCOPE'});await assert.rejects(call('system.create',{}),{code:'LIBRARY_SCOPE'});assert.deepEqual(calls,['composer.prepare','composer.prepare']);
 });
+
+test('recycle-bin restore prepares the library owner without opening a deleted project Session',async()=>{
+ const f=fixture();await f.call('project.restore',{projectId:'p-deleted',expectedRevision:9});
+ assert.deepEqual(f.calls.map(c=>c.action),['composer.prepare','project.restore']);
+ assert.equal(f.calls[0].args.scope,'library');assert.equal(f.calls[1].args.contextSessionId,'library-owner');
+});

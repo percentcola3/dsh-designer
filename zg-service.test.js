@@ -18,7 +18,7 @@ function fixture({run, alias = false} = {}) {
     const request = JSON.parse(spec.stdin), result = request.operation === 'status' ? {engine: 'zg', available: true, model: {state: 'ready'}} : {engine: 'zg', sourceVersion: 1, results: [], readonly: true};
     const handle = {result: async () => ({exitCode: 0, stdout: {text: JSON.stringify({ok: true, result})}, stderr: {text: ''}})}; handles.push(handle); return handle;
   }};
-  return {service: new ZgService({ctx: {fs: provider, shell}, store: {root, projectPhysicalRoot: async projectId => root + '/projects/' + projectId}, policy: () => policy}, {platform: 'linux'}), calls, handles, writes};
+  return {service: new ZgService({ctx: {fs: provider, shell}, store: {root, projectPhysicalRoot: async projectId => root + '/projects/' + projectId}, policy: () => policy}, {platform: 'linux', environment: {}}), calls, handles, writes};
 }
 
 test('managed query has a fixed command, JSON stdin and a narrowed read-only policy', async () => {

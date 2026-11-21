@@ -3,7 +3,6 @@ import {ErrorBox} from './common.jsx';
 import DesignerComposer from './DesignerComposer.jsx';
 import {useNativeDesignerComposer} from './NativeComposerControls.jsx';
 import {uploadFile} from './upload.js';
-import {Icon} from './brand.jsx';
 import ProjectCard from './ProjectCard.jsx';
 import homeStyles from './home-styles.js';
 
@@ -57,13 +56,9 @@ export default function HomePanel({
   return <section className="wb-home" data-has-recent={projects.length > 0} aria-label="设计师工作台首页" aria-busy={pending}>
     <style>{homeStyles}</style>
     <div className="wb-home-inner">
-      <header className="wb-home-intro">
-        <div className="wb-home-eyebrow"><Icon name="leaf" size={15}/>让每个想法，慢慢长成</div>
-        <h1>从一个想法，<br className="wb-home-mobile-break"/>开始新的<span className="wb-home-heading-accent">设计</span>。</h1>
-      </header>
       <div className="wb-home-composer-host"><DesignerComposer ref={composerRef} variant="home" value={draft}
         onChange={value=>{setStartError(null);onDraftChange?.(value);}} onSubmit={start} disabled={pending} submitDisabled={!native.canPrompt}
-        submitting={busy||submitting} ariaLabel="设计需求" placeholder="描述你的想法，开始新的设计…" api={api}
+        submitting={busy||submitting} ariaLabel="设计需求" placeholder="描述你的想法，开始新的设计…" api={api} conversation={ctx?.uiConversation} contextSessionId={native.sessionId}
         projects={allProjects} references={composeOptions.references||[]} onReferencesChange={references=>patch({references})}
         attachments={composeOptions.attachments||[]} onFiles={addFiles} canAttach={native.canUpload}
         onRemoveAttachment={(_attachment,index)=>patch({attachments:(composeOptions.attachments||[]).filter((_,i)=>i!==index)})}

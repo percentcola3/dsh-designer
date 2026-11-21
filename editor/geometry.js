@@ -7,6 +7,12 @@ export function pageWithViewViewport(page,view={}){
   if(!Number.isInteger(viewport.width)||!Number.isInteger(viewport.height)||viewport.width<100||viewport.width>10000||viewport.height<100||viewport.height>20000)return page;
   return {...page,savedViewport:page.viewport,viewport:{width:viewport.width,height:viewport.height}};
 }
+export function pageWithContentHeight(page,mode,contentHeight){
+  const viewport=viewportOf(page),height=Number(contentHeight);
+  if(!Number.isFinite(height)||height<=0)return page;
+  if(mode!=='live'&&(mode!=='edit'||height<=viewport.height))return page;
+  return {...page,savedViewport:page.savedViewport||viewport,previewViewport:viewport,viewport:{...viewport,height:Math.ceil(height)}};
+}
 export function savedViewportOf(page){return viewportOf({...page,viewport:page?.savedViewport||page?.viewport})}
 export function positionOf(page){return {x:finite(page?.position?.x),y:finite(page?.position?.y)}}
 export function pagePoint(client,rect,viewport){if(!rect?.width||!rect?.height)return {x:0,y:0};return {x:clamp((client.clientX-rect.left)*viewport.width/rect.width,0,viewport.width),y:clamp((client.clientY-rect.top)*viewport.height/rect.height,0,viewport.height)}}
@@ -18,6 +24,10 @@ export function fitBounds(bounds,size,padding=56){if(!bounds||bounds.width<=0||b
 export function unionBounds(boxes){const values=boxes.filter(b=>b&&[b.x,b.y,b.width,b.height].every(Number.isFinite)&&b.width>=0&&b.height>=0);if(!values.length)return null;const x=Math.min(...values.map(v=>v.x)),y=Math.min(...values.map(v=>v.y));return {x,y,width:Math.max(...values.map(v=>v.x+v.width))-x,height:Math.max(...values.map(v=>v.y+v.height))-y}}
 export function selectionIds(selection){return Array.isArray(selection?.nodeIds)?[...new Set(selection.nodeIds.filter(id=>typeof id==='string'))]:[]}
 export function toggleSelection(previous,id,additive=false){if(!additive)return [id];return previous.includes(id)?previous.filter(value=>value!==id):[...previous,id]}
+export function hitSelectionIds(previous,id,{additive=false,context=false,double=false}={}){
+  if(additive&&!context)return toggleSelection(previous,id,true);
+  return previous.includes(id)&&!double?previous:[id];
+}
 export function topmostIds(ids,nodes){const selected=new Set(ids);return ids.filter(id=>{let parent=nodes[id]?.parentId;const seen=new Set();while(parent&&!seen.has(parent)){if(selected.has(parent))return false;seen.add(parent);parent=nodes[parent]?.parentId}return true})}
 export function sharedContext(id,nodes){let node=nodes[id];const seen=new Set();while(node&&!seen.has(node.id)){seen.add(node.id);if(node.definitionId||node.instanceId)return {definitionId:node.definitionId||node.instanceId,rootId:node.id,isDefinition:!!node.definitionId,slot:id===node.id?null:nodes[id]?.slot};node=nodes[node.parentId]}return null}
 export function commonValue(objects,key,source='styles'){if(!objects.length)return {value:'',mixed:false};const values=objects.map(object=>object[source]?.[key]??'');const mixed=values.some(value=>value!==values[0]);return {value:mixed?'':String(values[0]),mixed}}
@@ -40,7 +50,30 @@ export function sourceDragOperations(objects,delta,{snap=0}={}){
 }
 export function selectionMetadata(objects=[]){const first=objects[0];if(!first)return {};return Object.fromEntries(['documentEpoch','renderEpoch','sceneId','artifact'].filter(key=>first[key]!==undefined).map(key=>[key,first[key]]));}
 export function mergeMeasurements(ids,model,measured=[],page){const map=new Map(measured.filter(object=>object&&typeof (object.nodeId||object.id)==='string').map(object=>[object.nodeId||object.id,object]));if(isFrameworkArtifact(model,page))return ids.filter(id=>map.has(id)).map(id=>({...map.get(id),id,nodeId:id}));return ids.filter(id=>model?.nodes?.[id]).map(id=>{const node=model.nodes[id],value=map.get(id);return {...node,...value,id,nodeId:id,text:node.text,attributes:{...node.attributes},styles:{...value?.styles,...node.style},locked:!!node.locked,hidden:!!node.hidden,renderedHidden:!!value?.hidden,childIds:node.childIds,parentId:node.parentId,bounds:value?.bounds||null,documentBounds:value?.documentBounds||null}})}
-export function flowDropIndex({parent,targetId,point,targetBounds,movingIds=[]}){const moving=new Set(movingIds),slots=Array.isArray(parent?.childElements)?parent.childElements.map(item=>item.nodeId||null):(parent?.childIds||[]);const remaining=slots.filter(id=>!moving.has(id));const index=remaining.indexOf(targetId);if(index<0)throw Object.assign(new Error('放置目标已改变，请重新拖动。'),{code:'DROP_TARGET_CHANGED'});const direction=parent.styles?.['flex-direction']||'column',row=direction.startsWith('row')||parent.styles?.display==='grid';let after=row?point.x>targetBounds.x+targetBounds.width/2:point.y>targetBounds.y+targetBounds.height/2;if(direction.endsWith('reverse'))after=!after;return index+(after?1:0)}
+export function flowDropEdge(styles,point,bounds){
+  const flex=styles?.display?.includes('flex'),grid=styles?.display?.includes('grid');
+  const direction=styles?.['flex-direction']||'row';
+  const horizontal=grid?!styles['grid-auto-flow']?.startsWith('column'):flex&&direction.startsWith('row');
+  const end=horizontal?point.x>bounds.x+bounds.width/2:point.y>bounds.y+bounds.height/2;
+  const reverse=Boolean(flex&&direction.endsWith('reverse'))!==Boolean(horizontal&&styles?.direction==='rtl');
+  return {after:reverse?!end:end,line:horizontal
+    ?{x:bounds.x+(end?bounds.width:0),y:bounds.y,width:2,height:bounds.height}
+    :{x:bounds.x,y:bounds.y+(end?bounds.height:0),width:bounds.width,height:2}};
+}
+export function flowDropIndex({parent,targetId,point,targetBounds,movingIds=[]}){
+  const moving=new Set(movingIds),slots=Array.isArray(parent?.childElements)?parent.childElements.map(item=>item.nodeId||null):(parent?.childIds||[]);
+  const index=slots.filter(id=>!moving.has(id)).indexOf(targetId);
+  if(index<0)throw Object.assign(new Error('放置目标已改变，请重新拖动。'),{code:'DROP_TARGET_CHANGED'});
+  return index+Number(flowDropEdge(parent.styles,point,targetBounds).after);
+}
+export function gridPlacementSwap(source,target){
+  const properties=['grid-row-start','grid-row-end','grid-column-start','grid-column-end'];
+  const placement=object=>Object.fromEntries(properties.map(name=>[name,object.styles?.[name]||'auto']));
+  const a=placement(source),b=placement(target);
+  if(properties.every(key=>a[key]===b[key]))return null;
+  if(![a,b].every(style=>properties.some(key=>style[key]!=='auto'&&!style[key].startsWith('span '))))return null;
+  return [{type:'style',nodeIds:[source.id],styles:b,scope:'instance'},{type:'style',nodeIds:[target.nodeId],styles:a,scope:'instance'}];
+}
 export function relativePath(from,to){const a=String(from||'pages/page.html').split('/');a.pop();const b=String(to).split('/');while(a.length&&b.length&&a[0]===b[0]){a.shift();b.shift()}return [...a.map(()=>'..'),...b].map(segment=>segment==='..'||segment==='.'?segment:encodeURIComponent(segment)).join('/')}
 export function resizedBox(bounds,delta,{snap=0,aspect=false}={}){let width=Math.max(1,bounds.width+delta.x),height=Math.max(1,bounds.height+delta.y);if(aspect&&bounds.width&&bounds.height){const factor=Math.abs(delta.x/bounds.width)>=Math.abs(delta.y/bounds.height)?width/bounds.width:height/bounds.height;width=bounds.width*factor;height=bounds.height*factor}if(snap){width=Math.max(snap,Math.round(width/snap)*snap);height=Math.max(snap,Math.round(height/snap)*snap)}return {...bounds,width,height}}
 export function resizeStyles(object,box){const width=parseFloat(object.styles?.width),height=parseFloat(object.styles?.height),extraX=Number.isFinite(width)?object.bounds.width-width:0,extraY=Number.isFinite(height)?object.bounds.height-height:0;return {width:Math.max(0,box.width-extraX)+'px',height:Math.max(0,box.height-extraY)+'px'}}

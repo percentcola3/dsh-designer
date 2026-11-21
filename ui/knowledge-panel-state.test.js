@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildKnowledgeTree, knowledgeIndexState, knowledgeIndexProgress, knowledgeImportRunning, knowledgeImportState, knowledgeImportName, knowledgeDraftDirty, knowledgeViewTicket, knowledgeResponseCurrent, knowledgeUploadPath, uploadKnowledgeFiles, importKnowledgeFiles, loadKnowledgeTextPreview, isKnowledgeText } from './knowledge-panel-state.js';
+import { buildKnowledgeTree, knowledgeTreeEntries, knowledgePreviewTab, knowledgeLinkedDocument, knowledgeIndexState, knowledgeIndexProgress, knowledgeImportRunning, knowledgeImportState, knowledgeImportName, knowledgeDraftDirty, knowledgeViewTicket, knowledgeResponseCurrent, knowledgeUploadPath, uploadKnowledgeFiles, importKnowledgeFiles, loadKnowledgeTextPreview, isKnowledgeText } from './knowledge-panel-state.js';
 
 test('directory trees retain paths, sort folders first, and keep duplicate originals distinct', () => {
   const documents = [{ id: 'readme', name: 'README.md', relativePath: 'README.md' }, { id: 'two', relativePath: 'src/order2.ts' }, { id: 'ten', relativePath: 'src/order10.ts' }, { id: 'duplicate', relativePath: 'src/order2.ts' }, { id: 'api', relativePath: 'src/api/index.ts' }, { id: 'proto', relativePath: '__proto__/file.txt' }];
@@ -10,6 +10,46 @@ test('directory trees retain paths, sort folders first, and keep duplicate origi
   assert.deepEqual(src.children.filter(node => node.type === 'file').map(node => node.document.id), ['two', 'duplicate', 'ten']);
   assert.equal(tree.find(node => node.path === '__proto__').children[0].document.id, 'proto');
   assert.equal(documents.length, 6);
+});
+
+test('native file tree entries retain duplicate originals with unique identities and their original display names', () => {
+  const entries = knowledgeTreeEntries(buildKnowledgeTree([
+    {id: 'd-one', name: 'guide.md', relativePath: 'docs/guide.md'},
+    {id: 'd-two', name: 'guide.md', relativePath: 'docs/guide.md'},
+  ]));
+  assert.equal(entries[0].meta.kind, 'directory');
+  assert.equal(new Set(entries.map(entry => entry.path)).size, 3);
+  assert.deepEqual(entries.slice(1).map(entry => entry.meta.documentId), ['d-one', 'd-two']);
+  assert.ok(entries.slice(1).every(entry => entry.name === 'guide.md'));
+});
+
+test('knowledge previews classify original bytes, keep readonly and expose PDF image and download URLs', () => {
+  const original = {originalUrl: '/original', downloadUrl: '/original?download=true'};
+  for (const name of ['report.pdf', 'photo.png', 'movie.mp4', 'sound.mp3']) {
+    const tab = knowledgePreviewTab(original, {id: name, name});
+    assert.equal(tab.binary, false);
+    assert.equal(tab.previewUrl, '/original');
+    assert.equal(tab.downloadUrl, original.downloadUrl);
+    assert.equal(tab.readonly, true);
+  }
+  for (const name of ['report.docx', 'report.doc', 'slides.pptx', 'data.xlsx', 'archive.zip']) {
+    assert.equal(knowledgePreviewTab(original, {id: name, name}).type, 'binary');
+  }
+  const markdown = knowledgePreviewTab({...original, content: '# Guide', truncated: true}, {id: 'd-md', name: 'guide.md', mimeType: 'application/octet-stream'});
+  assert.equal(markdown.binary, false);
+  assert.equal(markdown.content, '# Guide');
+  assert.equal(markdown.truncated, true);
+  assert.equal(markdown.mimeType, 'text/plain');
+  assert.equal(isKnowledgeText({name: 'icon.svg'}), true);
+});
+
+test('relative Markdown images resolve only to a unique original in the current knowledge library', () => {
+  const document = {name: 'guide.md', relativePath: 'docs/guide.md'};
+  const image = {id: 'd-image', relativePath: 'assets/图.png'};
+  assert.equal(knowledgeLinkedDocument(document, '../assets/%E5%9B%BE.png', [image]), image);
+  assert.throws(() => knowledgeLinkedDocument(document, 'https://other.test/image.png', [image]), /当前知识库/);
+  assert.throws(() => knowledgeLinkedDocument(document, '../missing.png', [image]), /不存在/);
+  assert.throws(() => knowledgeLinkedDocument(document, '../assets/图.png', [image, {...image, id: 'duplicate'}]), /不唯一/);
 });
 
 test('file name filtering preserves ancestor folders and rejects invalid stored paths', () => {

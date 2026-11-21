@@ -1,3 +1,4 @@
+import {applyRuntimeStyle} from '../editor/runtime-style.js';
 import React from "react";
 import styles from "./styles.js";
 import ErrorToast from './ErrorToast.jsx';
@@ -13,6 +14,7 @@ import AIPanel from "./AIPanel.jsx";
 import SourcePanel from "./SourcePanel.jsx";
 import RuntimePanel from "./RuntimePanel.jsx";
 import LibraryPanel from "./LibraryPanel.jsx";
+import SystemLibrary from "./SystemLibrary.jsx";
 import KnowledgePanel from './KnowledgePanel.jsx';
 import { mapInBatches, createLimiter } from "./async.js";
 import { acquireProjectSession } from "./session-retention.js";
@@ -24,7 +26,7 @@ import { targetFromSelection } from "./target-state.js";
 import {invalidateIdentityState} from './identity-state.js';
 import {orderedDesignPages,reorderPageBefore} from './page-order.js';
 import FileNavigation from './FileNavigation.jsx';
-import {readPanelLayout,savePanelLayout} from './panel-layout.js';
+import {panelWidth,readPanelLayout,savePanelLayout} from './panel-layout.js';
 import {readConversationLayout,saveConversationLayout} from './canvas-conversation-layout.js';
 import {Icon} from './brand.jsx';
 import WorkbenchShell from './WorkbenchShell.jsx';
@@ -41,7 +43,8 @@ import {designCanvasTab,sourceCanvasTab,canvasFirstState} from './canvas-workspa
 import {projectCardAction} from './project-card-actions.js';
 function localStorageOrNull(){try{return globalThis.localStorage;}catch{return null;}}
 function Workbench({ ctx, Canvas, api, onExit, legacy = {}, t }) {
-  const [library, setLibrary] = React.useState({ projects: [], groups: [], systems: [], knowledge: [] }), [appTabs, dispatchWorkspaceTabs] = React.useReducer(workspaceTabsReducer, initialWorkspaceTabs), [opened, setOpened] = React.useState([]), [projectRuns, setProjectRuns] = React.useState({}), [projectId, setProjectId] = React.useState(null), [workspaces, setWorkspaces] = React.useState({}), [tabs, dispatch] = React.useReducer(tabReducer, emptyTabs), [designId, setDesignId] = React.useState(null), [selection, setSelection] = React.useState(null), [target, setTarget] = React.useState(null), [references, setReferences] = React.useState([]), [mode, setMode] = React.useState("edit"), [device, setDevice] = React.useState("responsive"), [customViewport, setCustomViewport] = React.useState({ width: 1280, height: 800 }), [nav, setNav] = React.useState("pages"), [navOpen, setNavOpen] = React.useState(false), [navWidth, setNavWidth] = React.useState(300), [aiOpen, setAiOpen] = React.useState(true), [focus, setFocus] = React.useState(false), [fullscreen, setFullscreen] = React.useState(false), [query, setQuery] = React.useState(""), [managerQuery, setManagerQuery] = React.useState(""), [group, setGroup] = React.useState("all"), [error, setError] = React.useState(null), [busy, setBusy] = React.useState(false), [modal, setModal] = React.useState(null), [tabMenu, setTabMenu] = React.useState(null), [closeFailure, setCloseFailure] = React.useState(null), [diagnostics, setDiagnostics] = React.useState([]), [status, setStatus] = React.useState({ save: "\u5DF2\u4FDD\u5B58", validation: "\u5F85\u9A8C\u8BC1", preview: "\u672A\u9884\u89C8", runtime: "\u672A\u542F\u52A8" }), [binding, setBinding] = React.useState(null);
+  const [library, setLibrary] = React.useState({ projects: [], groups: [], systems: [], knowledge: [] }), [appTabs, dispatchWorkspaceTabs] = React.useReducer(workspaceTabsReducer, initialWorkspaceTabs), [opened, setOpened] = React.useState([]), [projectRuns, setProjectRuns] = React.useState({}), [projectId, setProjectId] = React.useState(null), [workspaces, setWorkspaces] = React.useState({}), [tabs, dispatch] = React.useReducer(tabReducer, emptyTabs), [designId, setDesignId] = React.useState(null), [selection, setSelection] = React.useState(null), [target, setTarget] = React.useState(null), [references, setReferences] = React.useState([]), [device, setDevice] = React.useState("responsive"), [customViewport, setCustomViewport] = React.useState({ width: 1280, height: 800 }), [nav, setNav] = React.useState("pages"), [navOpen, setNavOpen] = React.useState(false), [navWidth, setNavWidth] = React.useState(320), [aiOpen, setAiOpen] = React.useState(true), [focus, setFocus] = React.useState(false), [fullscreen, setFullscreen] = React.useState(false), [managerQuery, setManagerQuery] = React.useState(""), [group, setGroup] = React.useState("all"), [error, setError] = React.useState(null), [busy, setBusy] = React.useState(false), [modal, setModal] = React.useState(null), [tabMenu, setTabMenu] = React.useState(null), [closeFailure, setCloseFailure] = React.useState(null), [diagnostics, setDiagnostics] = React.useState([]), [status, setStatus] = React.useState({ save: "\u5DF2\u4FDD\u5B58", validation: "\u5F85\u9A8C\u8BC1", preview: "\u672A\u9884\u89C8", runtime: "\u672A\u542F\u52A8" }), [binding, setBinding] = React.useState(null);
+  const [canvasFrozen,setCanvasFrozen]=React.useState(false);
   const activeAppTab=appTabs.items.find(item=>item.id===appTabs.activeId)||initialWorkspaceTabs.items[0];
   const screen=activeAppTab.kind;
   const appTabsRef=React.useRef(appTabs);appTabsRef.current=appTabs;
@@ -55,9 +58,9 @@ function Workbench({ ctx, Canvas, api, onExit, legacy = {}, t }) {
   const workspace = workspaces[projectId], project = workspace?.project, designs = workspace?.designs || [], pages = workspace?.pages || [], design = designs.find((d) => d.id === designId) || designs[0], active = tabs.items.find((t2) => t2.id === tabs.activeId), documents = workspace?.documents || {}, loadSequence = React.useRef(0), resourceOpenSequence = React.useRef(0), pageLoads = React.useRef(/* @__PURE__ */ new Map()), pageLimit = React.useRef(createLimiter(4)), uploadRefresh = React.useRef(null), canvasControllers = React.useRef(/* @__PURE__ */ new Map()), pendingLocate = React.useRef(null), tabRef = React.useRef(tabs), projectRef = React.useRef(project), viewVersions = React.useRef({}), restoreGuard = React.useRef(false), saveQueue = React.useRef(Promise.resolve()), draftQueues = React.useRef(/* @__PURE__ */ new Map()), draftTimers = React.useRef(/* @__PURE__ */ new Map()), draftVersions = React.useRef(/* @__PURE__ */ new Map()), sessionViews = React.useRef(/* @__PURE__ */ new Map()), currentWorkspace = React.useRef(workspace);
   const [navigationViews,setNavigationViews]=React.useState({});
   const [projectSettingsRefresh,setProjectSettingsRefresh]=React.useState({});
-  const [projectSidebarOpen,setProjectSidebarOpen]=React.useState(false),[resourceVisible,setResourceVisible]=React.useState(false),[canvasTool,setCanvasTool]=React.useState('select'),[newDesignProjectId,setNewDesignProjectId]=React.useState(null);
-  const designSwitch=React.useRef(0),pageCreation=React.useRef(false),projectActionLocks=React.useRef(new Set()),emptyCanvasController=React.useRef(null);
-  const [emptyCameras,setEmptyCameras]=React.useState({});
+  const [projectSidebarOpen,setProjectSidebarOpen]=React.useState(false),[resourceVisible,setResourceVisible]=React.useState(false),[canvasTool,setCanvasTool]=React.useState('interact'),[newDesignProjectId,setNewDesignProjectId]=React.useState(null);
+  const designSwitch=React.useRef(0),pageCreation=React.useRef(false),projectActionLocks=React.useRef(new Set());
+  const [capturing,setCapturing]=React.useState(false);
   const [projectLoadErrors,setProjectLoadErrors]=React.useState({});
   React.useEffect(()=>{if(screen==='project'){setProjectSidebarOpen(false);setNavOpen(false);setResourceVisible(false);}},[screen,projectId]);
   const [panelLayout,setPanelLayout]=React.useState(()=>readPanelLayout(localStorageOrNull()));
@@ -89,7 +92,9 @@ function Workbench({ ctx, Canvas, api, onExit, legacy = {}, t }) {
   }, []);
   const scopedApi=React.useMemo(()=>createWorkbenchApi(api),[api,library.root]);
   const invoke = React.useCallback(async (action, args = {}) => {
-    return cacheApiResult(await scopedApi(action,args),args);
+    const result=cacheApiResult(await scopedApi(action,args),args);
+    if(result?.localHistory?.state==='failed')setError({code:result.localHistory.error.code,message:result.localHistory.error.message});
+    return result;
   }, [cacheApiResult,scopedApi]);
   const homeApi=React.useCallback((action,args={})=>{const sessionId=homeOptionsRef.current.sessionId;return invoke(action,{...(sessionId?{contextSessionId:sessionId}:{}),...(action==='composer.prepare'&&!args.projectId&&sessionId?{sessionId}:{}),...args});},[invoke,library.root]);
   const projectPreviewApi=React.useCallback((action,args)=>api(action,args),[api,library.root]);
@@ -98,6 +103,7 @@ function Workbench({ ctx, Canvas, api, onExit, legacy = {}, t }) {
     if (args.replace) await uploadRefresh.current?.(result, args);
     return result;
   }, [scopedApi, cacheApiResult]);
+  homeApi.upload = invoke.upload;
   const refreshLibrary = React.useCallback(async () => {
     const result = await invoke("state");
     setLibrary({ projects: [], groups: [], systems: [], knowledge: [], ...result });
@@ -164,7 +170,7 @@ function Workbench({ ctx, Canvas, api, onExit, legacy = {}, t }) {
         }
         if (tab.type === "system") {
           try {
-            const system = await invoke("system.get", { systemId: tab.systemId });
+            const system = await invoke("system.get", { systemId: tab.systemId, version:tab.systemVersion });
             const version = system.versions.find((v) => v.version === tab.systemVersion);
             if (!version) throw errorValue("\u56FA\u5B9A\u89C4\u8303\u7248\u672C\u5DF2\u5931\u6548", "REFERENCE_STALE");
             return { ...tab, content: JSON.stringify(version, null, 2), readonly: true, error: null };
@@ -197,11 +203,11 @@ function Workbench({ ctx, Canvas, api, onExit, legacy = {}, t }) {
       setTarget({projectId:id,designId:initial.design?.id,pageId:initial.tab?.activePageId||undefined,scope:state.target?.readonlyChoice?'read':initial.design?'design':'read',readonlyChoice:!!state.target?.readonlyChoice});
       setReferences(state.references || []);
       setSelection(initial.tab?.selection || null);
-      setMode(state.mode || "edit");
+
       setDevice(state.device || "responsive");
       setCustomViewport(state.customViewport || { width: 1280, height: 800 });
-      setNav("files");setQuery('');
-      setNavWidth(state.navWidth || 244);
+      setNav("files");
+      setNavWidth(panelWidth(state.navWidth, 320, 480, 320));
       setNavigationViews(state.navigationViews||{});
       setNavOpen(false);setAiOpen(true);
       restoreGuard.current = true;
@@ -272,7 +278,7 @@ function Workbench({ ctx, Canvas, api, onExit, legacy = {}, t }) {
       cleanup.forEach((fn) => fn());
     };
   }, [sessionTargets, ctx, invoke, loadWorkspace, refreshLibrary]);
-  const captureState = () => ({ tabs: tabRef.current.items, activeTabId: tabRef.current.activeId, designId: design?.id, target, references, selection, mode, device, customViewport, nav, navWidth, navOpen, aiOpen, navigationViews, query });
+  const captureState = () => ({ tabs: tabRef.current.items, activeTabId: tabRef.current.activeId, designId: design?.id, target, references, selection, device, customViewport, nav, navWidth, navOpen, aiOpen, navigationViews });
   const flushView = async () => {
     for (const controller of canvasControllers.current.values()) await controller.flush();
     if (projectId && project && restoreGuard.current) {
@@ -342,7 +348,7 @@ function Workbench({ ctx, Canvas, api, onExit, legacy = {}, t }) {
   React.useEffect(() => {
     if (!projectId || !project || !restoreGuard.current) return;
     const timer = setTimeout(() => {
-      const state = { tabs: tabs.items, activeTabId: tabs.activeId, designId: design?.id, target, references, selection, mode, device, customViewport, nav, navWidth, navOpen, aiOpen, navigationViews, query };
+      const state = { tabs: tabs.items, activeTabId: tabs.activeId, designId: design?.id, target, references, selection, device, customViewport, nav, navWidth, navOpen, aiOpen, navigationViews };
       saveQueue.current = saveQueue.current.catch(() => {
       }).then(async () => {
         const r = await invoke("workspace.state.save", { projectId, state: compactState(state), expectedVersion: viewVersions.current[projectId] ?? null });
@@ -350,7 +356,7 @@ function Workbench({ ctx, Canvas, api, onExit, legacy = {}, t }) {
       }).catch(setError);
     }, 500);
     return () => clearTimeout(timer);
-  }, [projectId, tabs, design?.id, target, references, selection, mode, device, customViewport, nav, navWidth, navOpen, aiOpen, navigationViews, query]);
+  }, [projectId, tabs, design?.id, target, references, selection, device, customViewport, nav, navWidth, navOpen, aiOpen, navigationViews]);
   React.useEffect(() => {
     if (!project || !design) return;
     let live = true;
@@ -455,16 +461,16 @@ function Workbench({ ctx, Canvas, api, onExit, legacy = {}, t }) {
       setBusy(false);
     }
   };
-  const openCanvas = (page, keep = false) => {
+  const openCanvas = (page, keep = false, savedDesign) => {
     if (!project) return;
     setResourceVisible(false);
     resourceOpenSequence.current++;
-    const d = designs.find((d2) => d2.id === page.designId || d2.pageIds?.includes(page.id)) || design;
+    const d = savedDesign || designs.find((d2) => d2.id === page.designId || d2.pageIds?.includes(page.id)) || design;
     setDesignId(d?.id);
     const id = resourceKey(project.id, { id: d?.id || "default", type: "canvas" });
     dispatch({ type: "open", keep, tab: { id, type: "canvas", resourceId: d?.id || "default", designId: d?.id, name: d?.name || "\u8BBE\u8BA1\u753B\u5E03", activePageId: page.id, view: {} } });
-    updateTab(id, { activePageId: page.id });
-    setTarget((previous) => previous || { projectId: project.id, designId: d?.id, pageId: page.id, scope: "read" });
+    updateTab(id, { activePageId: page.id,selection:null });
+    setTarget(previous=>({projectId:project.id,designId:d?.id,pageId:page.id,scope:previous?.readonlyChoice?"read":"page",readonlyChoice:!!previous?.readonlyChoice}));
     setSelection(null);
   };
   const canTargetResource = (tab) => {
@@ -501,10 +507,10 @@ function Workbench({ ctx, Canvas, api, onExit, legacy = {}, t }) {
         return;
       }
       if (ref.type === "system") {
-        const system = await invoke("system.get", { systemId: ref.systemId });
+        const system = await invoke("system.get", { systemId: ref.systemId, version:ref.version });
         const version = system.versions.find((v) => v.version === ref.version);
         if (!version) throw errorValue("\u6B64\u56FA\u5B9A\u89C4\u8303\u7248\u672C\u5DF2\u5931\u6548", "REFERENCE_STALE");
-        openContent("system", { resourceId: `${ref.systemId}:v${ref.version}`, name: system.name, readonly: true, systemId: ref.systemId, systemVersion: ref.version, path: `systems/${system.name}/v${ref.version}.json`, content: JSON.stringify(version, null, 2) });
+        openContent("system", { resourceId: `${ref.systemId}:v${ref.version}`, name: system.name, readonly: true, systemId: ref.systemId, systemVersion: ref.version, path: `systems/${system.name}.json`, content: JSON.stringify(version, null, 2) });
         return;
       }
       if (ref.sourceId && ref.path) {
@@ -621,21 +627,6 @@ function Workbench({ ctx, Canvas, api, onExit, legacy = {}, t }) {
     const controller = canvasControllers.current.get(id);
     if (controller) await controller.flush();
   };
-  const switchMode = async (next, full = false) => {
-    try {
-      const canvasId=tabRef.current.items.find(t=>t.type==='canvas'&&t.designId===design?.id)?.id||tabs.activeId;
-      await flushCanvas(canvasId);
-      if (next === "preview") {
-        const report = await canvasControllers.current.get(canvasId)?.validate();
-        if (report?.valid === false || (report?.diagnostics || []).some((d) => d.severity === "error")) throw errorValue("\u9875\u9762\u6821\u9A8C\u5931\u8D25\uFF0C\u8BF7\u4FEE\u590D\u8BCA\u65AD\u540E\u518D\u9884\u89C8", "VALIDATION_FAILED", report);
-      }
-      setMode(next);
-      setFullscreen(full);
-      setStatus((s) => ({ ...s, preview: next === "preview" ? "\u9884\u89C8\u6A21\u5F0F" : "\u7F16\u8F91\u6A21\u5F0F" }));
-    } catch (e) {
-      setError(e);
-    }
-  };
   const saveAll = async () => {
     setError(null);
     try {
@@ -749,7 +740,14 @@ function Workbench({ ctx, Canvas, api, onExit, legacy = {}, t }) {
   const canvasChange = async (change) => {
     try {
       const transaction = canvasTransaction(change, { project: projectRef.current, design, pages, documents });
-      const result = await mutate("edit.apply", transaction, false);
+      let result;
+      if(change.runtimeStyle){
+        const model=documents[change.pageId];
+        if(!model||model.version!==transaction.expectedVersion)throw Error('页面已更新，请重新选择元素。');
+        const {selector,styles}=change.runtimeStyle;
+        const html=applyRuntimeStyle(model.savedHTML??model.html,selector,styles);
+        result=await mutate('artboard.commit',{artboardId:change.pageId,html,summary:change.summary,expectedVersion:transaction.expectedVersion,expectedRevision:transaction.expectedRevision,expectedArtboardRevision:transaction.expectedArtboardRevision},false);
+      }else result=await mutate("edit.apply",transaction,false);
       setWorkspaces((w) => ({ ...w, [project.id]: { ...w[project.id], project: result.project || w[project.id].project, documents: { ...w[project.id].documents, [change.pageId]: result.document || result } } }));
       setStatus((s) => ({ ...s, save: "\u5DF2\u4FDD\u5B58", validation: (result.diagnostics || []).some((d) => d.severity === "error") ? "\u5B58\u5728\u9519\u8BEF" : "\u901A\u8FC7", preview: "\u5DF2\u66F4\u65B0" }));
       return result;
@@ -845,10 +843,7 @@ function Workbench({ ctx, Canvas, api, onExit, legacy = {}, t }) {
     try{
       let prepared;
       const submitApi=(action,args={})=>invoke(action,{...args,...(options.sessionId?{contextSessionId:options.sessionId}:{})});
-      const result=await startHomeDesign(submitApi,prompt,{...options,checkpoint:homeCheckpoint.current,requestProjectOptions:values=>new Promise(resolve=>{
-        setModal({type:'homeProject',...values,prompt,onConfirm:selection=>{setModal(null);resolve(selection);},onCancel:()=>{setModal(null);resolve(null);}});
-      }),onCheckpoint:value=>{homeCheckpoint.current=value;},onPrepared:async value=>{prepared=value;}});
-      if(result.cancelled)return result;
+      const result=await startHomeDesign(submitApi,prompt,{...options,checkpoint:homeCheckpoint.current,onCheckpoint:value=>{homeCheckpoint.current=value;},onPrepared:async value=>{prepared=value;}});
       // Acknowledgement precedes navigation: failed admission keeps the home draft
       // and its native receipts visible, and no canvas owner races the CAS queue.
       await refreshLibrary();
@@ -887,7 +882,7 @@ function Workbench({ ctx, Canvas, api, onExit, legacy = {}, t }) {
   const resizeNav = (e) => {
     const start = e.clientX, width = navWidth, node = e.currentTarget;
     node.setPointerCapture(e.pointerId);
-    const move = (ev) => setNavWidth(Math.max(170, Math.min(420, width + ev.clientX - start)));
+    const move = (ev) => setNavWidth(Math.max(320, Math.min(480, width + ev.clientX - start)));
     const done = () => {
       node.removeEventListener("pointermove", move);
       node.removeEventListener("pointerup", done);
@@ -897,10 +892,11 @@ function Workbench({ ctx, Canvas, api, onExit, legacy = {}, t }) {
     node.addEventListener("pointerup", done);
     node.addEventListener("pointercancel", done);
   };
-  const shellNavigation=[{id:'home',label:'首页',icon:'home'},{id:'projects',label:'项目',icon:'folder'},{id:'systems',label:'设计体系',icon:'palette'},{id:'knowledge',label:'知识库',icon:'library'},{id:'skills',label:'技能库',icon:'wand'},{id:'settings',label:'设置',icon:'settings',bottom:true}];
+  const shellNavigation=[{id:'home',label:'首页',icon:'home'},{id:'projects',label:'项目',icon:'folder'},{id:'systems',label:'设计体系',icon:'palette'},{id:'knowledge',label:'知识库',icon:'knowledge'},{id:'skills',label:'技能库',icon:'skill'},{id:'settings',label:'设置',icon:'settings',bottom:true}];
   const settingsTabs=appTabs.items.filter(item=>item.kind==='project-settings');
   const isActiveProject=id=>projectRef.current?.id===id&&appTabsRef.current.activeId===`project:${id}`;
   const currentCanvasTab=project&&design?tabs.items.find(t=>t.type==='canvas'&&t.designId===design.id):null;
+  const canvasPageId=currentCanvasTab?.activePageId||orderedDesignPages(pages,design)[0]?.id;
   const canvasSourceTabs=tabs.items.filter(t=>t.type==='source'&&t.canvasWorkflow&&t.projectId===projectId&&designs.some(d=>d.id===t.designId));
   const currentSourceTab=canvasSourceTabs.find(t=>t.id===tabs.activeId);
   const resourceTabs=tabs.items.filter(t=>t.type!=='canvas'&&!t.canvasWorkflow);
@@ -947,56 +943,37 @@ function Workbench({ ctx, Canvas, api, onExit, legacy = {}, t }) {
     try{const result=await mutate('page.create',{designId:d.id,name:'新画板',position,viewport:d.platform==='mobile'?{width:390,height:844}:{width:1440,height:1000}});if(isActiveProject(owner)&&result.page){openCanvas(result.page,true);requestAnimationFrame(()=>canvasControllers.current.get(resourceKey(owner,{type:'canvas',id:d.id}))?.fit?.());}}
     catch(failure){setError(failure);}finally{pageCreation.current=false;}
   };
-  const canvasCommand=command=>{
-    const controller=canvasControllers.current.get(currentCanvasTab?.id)||emptyCanvasController.current;
-    try{Promise.resolve(controller?.[command]?.()).catch(setError);}catch(failure){setError(failure);}
-  };
   const openProjectFiles=kind=>{setNav(kind||'files');setNavOpen(true);};
   const projectOpenItems=screen==='project'&&project?[
     {id:'files',label:'项目文件',icon:'folder',onSelect:()=>openProjectFiles('files')},
-    {id:'boards',label:'项目画板',icon:'grid',onSelect:()=>openProjectFiles('pages')},
     {id:'requirements',label:'项目需求',icon:'book',onSelect:()=>project.workbench?.requirementsPath&&openResource({path:project.workbench.requirementsPath,name:'requirements.md'},true)},
     {id:'new-design',label:'新建设计稿',icon:'plus',onSelect:beginCanvasDesign},
     ...designs.map(d=>({id:d.id,label:d.name,icon:'layers',onSelect:()=>switchCanvasDesign(d.id)})),
     {id:'project-settings',label:'项目设置',icon:'settings',onSelect:()=>openProjectSettings(project)},
   ]:[];
-  const canvasMenuItems=[
-    {id:'add-page',label:'添加画板',disabled:!design||busy,onSelect:addCanvasPage},
-    {id:'properties',label:'属性面板',disabled:!currentCanvasTab,onSelect:()=>canvasCommand('toggleProperties')},
-    {id:'canvas-options',label:'画布设置',disabled:!currentCanvasTab,onSelect:()=>canvasCommand('toggleOptions')},
-    {id:'undo',label:'撤销',disabled:!currentCanvasTab,onSelect:()=>canvasCommand('undo')},
-    {id:'redo',label:'重做',disabled:!currentCanvasTab,onSelect:()=>canvasCommand('redo')},
-    {id:'history',label:'设计历史',onSelect:()=>showForm('history')},
-    {id:'binding',label:'设计规范',onSelect:()=>showForm('binding')},
-    {id:'source',label:pages.find(page=>page.id===currentCanvasTab?.activePageId)?.artifact?.entry?'打开页面源码':'源码与运行',onSelect:()=>{const sourcePage=pages.find(page=>page.id===currentCanvasTab?.activePageId);if(sourcePage?.artifact?.entry)openResource({path:sourcePage.artifact.entry,name:sourcePage.artifact.entry.split('/').pop()},true).catch(setError);else showForm('runtime');}},
-    {id:'git-sync',label:'Git 云同步',onSelect:()=>openProjectSettings(project,true)},
-    {id:'export',label:'导出 / 分享',onSelect:()=>showForm('delivery')},
-    {id:'chat',label:aiOpen?'收起对话':'打开对话',onSelect:()=>setAiOpen(v=>!v)},
-    {id:'settings',label:'项目设置',onSelect:()=>openProjectSettings(project)},
-  ];
-  const renderCanvas=tab=><div className="wb-resource"><ErrorBox error={documents[tab.activePageId]?.error} /><Canvas compactChrome onToolChange={setCanvasTool} onCreatePage={addCanvasPage} onController={(controller) => {
+  const renderCanvas=tab=><div className="wb-resource">{design?.websiteReplica?.recordingKey&&<div className="wb-resource-bar"><select aria-label="录制的页面" value={tab.activePageId} onChange={e=>openCanvas(pages.find(p=>p.id===e.target.value),true,design)}>{orderedDesignPages(pages,design).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div>}<ErrorBox error={documents[tab.activePageId]?.error} /><Canvas compactChrome onCaptureBusy={setCapturing} onFrozenChange={setCanvasFrozen} onToolChange={setCanvasTool} onCreatePage={addCanvasPage} onController={(controller) => {
     if (controller) {
       canvasControllers.current.set(tab.id, controller);
-      if(!tab.view?.camera)requestAnimationFrame(()=>{if(canvasControllers.current.get(tab.id)===controller)controller.fit?.();});
       if (pendingLocate.current?.tabId === tab.id) {
         const reference = pendingLocate.current.reference;
         pendingLocate.current = null;
         Promise.resolve(controller.locate?.(reference)).catch(setError);
       }
     } else canvasControllers.current.delete(tab.id);
-  }} ctx={ctx} api={invoke} project={project} design={designs.find((d) => d.id === tab.designId) || design} pages={orderedDesignPages(pages,designs.find(d=>d.id===tab.designId)||design)} documents={documents} activePageId={tab.activePageId} selection={tab.selection || null} mode={mode} scene={tab.scene} viewState={{ ...tab.view, device, viewport: device === "custom" ? customViewport : device === "mobile" ? { width: 390, height: 844 } : device === "tablet" ? { width: 768, height: 1024 } : device === "desktop" ? { width: 1440, height: 900 } : void 0 }} onSelect={(pageOrSelection, value, meta) => {
+  }} ctx={ctx} api={invoke} project={project} design={designs.find((d) => d.id === tab.designId) || design} pages={orderedDesignPages(pages,designs.find(d=>d.id===tab.designId)||design)} documents={documents} activePageId={tab.activePageId} selection={tab.selection || null} mode="edit" scene={tab.scene} viewState={{ ...tab.view, device, viewport: device === "custom" ? customViewport : device === "mobile" ? { width: 390, height: 844 } : device === "tablet" ? { width: 768, height: 1024 } : device === "desktop" ? { width: 1440, height: 900 } : void 0 }} onSelect={(pageOrSelection, value, meta) => {
     const legacySelection = typeof pageOrSelection === 'string';
     const s = legacySelection ? {pageId:pageOrSelection,...value} : pageOrSelection;
     const provenance = legacySelection ? meta : value;
     setSelection(s);
+    if(canvasTool==='pick'&&s?.objects?.length)setAiOpen(true);
     updateTab(tab.id, {selection:s});
-    setTarget(old=>targetFromSelection(old,s,{source:provenance?.source||'view',projectId:project.id,designId:tab.designId,pageId:s?.pageId||tab.activePageId,defaultScope:'design'}));
+    setTarget(old=>targetFromSelection(old,s,{source:provenance?.source||'view',forceSelection:canvasTool==='pick'&&provenance?.source==='user',projectId:project.id,designId:tab.designId,pageId:s?.pageId||tab.activePageId,defaultScope:'design'}));
   }} onNavigate={(id) => updateTab(tab.id, { activePageId: typeof id === "string" ? id : id.pageId })} onChange={canvasChange} onViewState={(view) => {const {navigation,locateSelection,...savedView}=view;if(navigation==='layers'){setNav('layers');setNavOpen(true);if(locateSelection)setSelection(locateSelection);}updateTab(tab.id,{view:{...tab.view,...savedView}});}} onReference={addReference} onDiagnostics={(d) => {
     const incoming=Array.isArray(d)?d:d?[d]:[];
     setDiagnostics(previous=>Array.isArray(d)?incoming:[...previous,...incoming].slice(-200));
     setStatus(s=>({...s,validation:incoming.some(item=>item.severity==='error')?'存在错误':Array.isArray(d)?'通过':s.validation,preview:d?.previewStatus==='ready'?'已加载保存版本 · 交互待核对':d?.previewStatus||s.preview}));
-  }} readonly={(target?.scope==='read'&&mode==='preview')||!!documents[tab.activePageId]?._identityInvalid||(tab.view?.visiblePageIds||[]).some(id=>documents[id]?._identityInvalid)} onInspect={legacy.onInspect} /></div>;
-  const renderResource=tab=>tab.type === "source" ? <div style={{ overflow: "auto", padding: 20, width: "100%" }}><SourcePanel key={`${project.id}:${tab.designId}:${tab.id}`} api={invoke} project={project} design={designs.find((d) => d.id === tab.designId) || design} provider={tab.provider} initialSourceId={tab.sourceId} referenceToLocate={tab.referenceToLocate} viewState={tab.view} onViewState={(view) => updateTab(tab.id, { view: { ...tab.view, ...view } })} legacy={legacy} t={t} mutate={mutate} onReference={addReference} selection={selection} /></div> : tab.type === "runtime" ? <div style={{ overflow: "auto", padding: 20, width: "100%" }}><RuntimePanel viewState={tab.view} onViewState={view=>updateTab(tab.id,{view:{...tab.view,...view}})} api={invoke} project={project} mutate={mutate} onStatus={setStatus} onOpenFile={openResource} onOpenRuntime={(r) => openContent("runPreview", { ...r, resourceId: r.id })} /></div> : tab.type === "runPreview" ? <div className="wb-resource"><ErrorBox error={tab.error} />{tab.url ? <><div className="wb-resource-bar"><span className="wb-grow wb-ellipsis">{tab.url}</span><a href={tab.url} target="_blank" rel="noopener noreferrer">外部打开 ↗</a></div><iframe className="wb-document-frame" title={tab.name} src={tab.url} sandbox="allow-scripts allow-forms allow-popups" /></> : <Empty title="运行服务不可用"><Button onClick={() => showForm("runtime")}>检查源码、运行状态与日志</Button></Empty>}</div> : <ResourceView tab={tab} api={invoke} projectId={projectId} onOpenFile={openResource} onRefresh={tab.type === "attachment" ? async (item) => updateTab(item.id, { ...await invoke("attachment.get", { projectId, receiptId: item.receiptId }), error: null }) : refreshFile} onHistoryAction={fileHistoryAction} onReconcile={reconcileFile} onSetTarget={setResourceTarget} canSetTarget={canTargetResource(tab)} onAssetAction={async (action, item) => {
+  }} readonly={!!documents[tab.activePageId]?._identityInvalid||(tab.view?.visiblePageIds||[]).some(id=>documents[id]?._identityInvalid)} onInspect={legacy.onInspect} /></div>;
+  const renderResource=tab=>tab.type === "source" ? <div style={{ display:"flex", minHeight:0, flex:1, overflow: tab.provider==='website'?"hidden":"auto", padding: tab.provider==='website'?0:20, width: "100%" }}><SourcePanel key={`${project.id}:${tab.designId}:${tab.id}`} api={invoke} project={project} design={designs.find((d) => d.id === tab.designId) || design} provider={tab.provider} activePanel={tabs.activeId===tab.id} onOpenReplica={(page,created)=>openCanvas(page,true,created)} initialSourceId={tab.sourceId} referenceToLocate={tab.referenceToLocate} viewState={tab.view} onViewState={(view) => updateTab(tab.id, { view: { ...tab.view, ...view } })} legacy={legacy} t={t} mutate={mutate} onReference={addReference} selection={selection} /></div> : tab.type === "runtime" ? <div style={{ overflow: "auto", padding: 20, width: "100%" }}><RuntimePanel viewState={tab.view} onViewState={view=>updateTab(tab.id,{view:{...tab.view,...view}})} api={invoke} project={project} mutate={mutate} onStatus={setStatus} onOpenFile={openResource} onOpenRuntime={(r) => openContent("runPreview", { ...r, resourceId: r.id })} /></div> : tab.type === "runPreview" ? <div className="wb-resource"><ErrorBox error={tab.error} />{tab.url ? <><div className="wb-resource-bar"><span className="wb-grow wb-ellipsis">{tab.url}</span><a href={tab.url} target="_blank" rel="noopener noreferrer">外部打开 ↗</a></div><iframe className="wb-document-frame" title={tab.name} src={tab.url} sandbox="allow-scripts allow-forms allow-popups" /></> : <Empty title="运行服务不可用"><Button onClick={() => showForm("runtime")}>检查源码、运行状态与日志</Button></Empty>}</div> : <ResourceView tab={tab} api={invoke} projectId={projectId} onOpenFile={openResource} onRefresh={tab.type === "attachment" ? async (item) => updateTab(item.id, { ...await invoke("attachment.get", { projectId, receiptId: item.receiptId }), error: null }) : refreshFile} onHistoryAction={fileHistoryAction} onReconcile={reconcileFile} onSetTarget={setResourceTarget} canSetTarget={canTargetResource(tab)} onAssetAction={async (action, item) => {
     if (action === "replace") {
       showForm("file", { path: item.path, fileId: item.resourceId, replace: true, fileAction: "asset" });
       return;
@@ -1008,15 +985,15 @@ function Workbench({ ctx, Canvas, api, onExit, legacy = {}, t }) {
     }
   }} onUpdate={(patch) => onFileUpdate(tab, patch)} onSave={(tab2) => saveTab(tab2).catch(setError)} onReference={addReference} />;
   return <div data-theme={theme} className={`wb wb-v2 ${focus ? "wb-focus" : ""} ${fullscreen ? "wb-fullscreen" : ""}`}><ToastProvider><style>{styles+refinedStyles+themeStyles}</style>
-    <WorkbenchShell sidebarVisible={screen!=='project'||projectSidebarOpen} onToggleSidebar={screen==='project'?()=>setProjectSidebarOpen(v=>!v):undefined} openItems={projectOpenItems} theme={theme} onToggleTheme={()=>setTheme(value=>value==='dark'?'light':'dark')}
+    <WorkbenchShell pluginVersion={library.pluginVersion} sidebarVisible={screen!=='project'||projectSidebarOpen} onToggleSidebar={screen==='project'?()=>setProjectSidebarOpen(v=>!v):undefined} openItems={projectOpenItems} theme={theme} onToggleTheme={()=>setTheme(value=>value==='dark'?'light':'dark')}
       navigation={shellNavigation} activeNavigationId={screen==='project'||screen==='project-settings'||screen==='manager'?'projects':activeAppTab.id}
       onNavigate={navigate}
       tabs={appTabs.items.map(item=>({...item,running:item.kind==='project'&&projectRuns[item.projectId]?.running}))} activeTabId={appTabs.activeId}
       onSelectTab={id=>navigateWorkspace(appTabsRef.current.items.find(item=>item.id===id))} onCloseTab={closeWorkspaceTab} onExit={exitWorkbench}>
       <ErrorToast error={error} onClose={dismissed=>setError(current=>current===dismissed?null:current)}/>
       {library.errors?.length>0&&screen!=='project'&&<details className="wb-library-warning"><summary>部分条目暂不可用（{library.errors.length}）</summary>{library.errors.map((entry,index)=><p className="wb-muted" key={index}>{entry.kind} · {entry.id} · {entry.error?.message}</p>)}</details>}
-        <div className="wb-management wb-persistent-page" style={{display:screen==='knowledge'?'block':'none'}}><KnowledgePanel key={library.root||'default-library'} api={invoke} library={library} onPickDirectory={()=>ctx.uiWorkspace.pickDirectory()} onRefresh={refreshLibrary} registerGuard={guard=>{settingsGuards.current.set('knowledge',guard);return()=>{if(settingsGuards.current.get('knowledge')===guard)settingsGuards.current.delete('knowledge');};}}/></div>
-        {['systems','skills'].map(kind=><div key={kind} className="wb-management wb-persistent-page" style={{display:screen===kind?'block':'none'}}><LibraryPanel kind={kind} api={invoke} library={library} onRefresh={refreshLibrary} registerGuard={guard=>{settingsGuards.current.set(kind,guard);return()=>{if(settingsGuards.current.get(kind)===guard)settingsGuards.current.delete(kind);};}}/></div>)}
+        <div className="wb-management wb-persistent-page" style={{display:screen==='knowledge'?'block':'none'}}><KnowledgePanel NativeFileTree={legacy?.NativeKnowledgeTree} key={library.root||'default-library'} api={invoke} library={library} onPickDirectory={()=>ctx.uiWorkspace.pickDirectory()} onRefresh={refreshLibrary} registerGuard={guard=>{settingsGuards.current.set('knowledge',guard);return()=>{if(settingsGuards.current.get('knowledge')===guard)settingsGuards.current.delete('knowledge');};}}/></div>
+        {['systems','skills'].map(kind=>{const Panel=kind==='systems'?SystemLibrary:LibraryPanel;return <div key={kind} className={`wb-management wb-persistent-page ${kind==='systems'?'wb-spec-management':''}`} style={{display:screen===kind?'block':'none'}}><Panel kind={kind} api={invoke} library={library} onRefresh={refreshLibrary} registerGuard={guard=>{settingsGuards.current.set(kind,guard);return()=>{if(settingsGuards.current.get(kind)===guard)settingsGuards.current.delete(kind);};}}/></div>;})}
         <div className="wb-management wb-persistent-page wb-project-management" style={{display:screen==='manager'?'flex':'none'}}>
           <ProjectManagerPanel previewApi={projectPreviewApi} onProjectAction={onProjectCardAction} library={library} api={invoke} onRefresh={refreshLibrary} group={group} onGroupChange={setGroup} query={managerQuery} onQueryChange={setManagerQuery} onOpenProject={openProject}
             onProjectSettings={record=>showForm('project',{...record,projectId:record.id})} onManageGroup={record=>showForm('group',record)}
@@ -1029,8 +1006,12 @@ function Workbench({ ctx, Canvas, api, onExit, legacy = {}, t }) {
       {screen!=='project'?<main className={`wb-management ${screen==='home'?'wb-home-management':''}`} style={{display:['home','settings'].includes(screen)?undefined:'none'}}>
         {screen==='home'&&<HomePanel api={homeApi} previewApi={projectPreviewApi} ctx={legacy?.nativeContext||ctx} nativeAccess={legacy?.nativeAccess} systems={library.systems||[]} allProjects={library.projects||[]} composeOptions={homeComposeOptions} onComposeOptionsChange={setHomeComposeOptions} groups={library.groups} onProjectAction={onProjectCardAction} recentProjects={getRecentProjects(library.projects,recentVisits)} draft={homeDraft} onDraftChange={setHomeDraft} onStart={startFromHome} onOpenProject={openProject} busy={homeBusy} error={homeError}/>}
         {screen==='settings'&&<SettingsPanel api={invoke} theme={theme} onThemeChange={setTheme} library={library} onPickDirectory={pickDirectory} onExit={exitWorkbench}/>}
-</main> : <ProjectCanvasLayout conversationLayout={conversationLayout} onConversationWidthChange={setConversationWidth} designs={designs} designId={design?.id} workflowTabs={canvasSourceTabs} activeWorkflowId={currentSourceTab?.id} onSelectWorkflow={switchCanvasSource} onCloseWorkflow={closeCanvasSource} conversationOpen={aiOpen} onOpenConversation={()=>setAiOpen(true)} onSelectDesign={switchCanvasDesign} onCreateDesign={beginCanvasDesign} onImportDesign={()=>openCanvasSource('mastergo')} onReplicateWebsite={()=>openCanvasSource('website')} navOpen={navOpen} onToggleFiles={()=>{setNav('files');setNavOpen(v=>!v);}} tool={canvasTool} onTool={tool=>{setCanvasTool(tool);canvasControllers.current.get(currentCanvasTab?.id)?.setTool?.(tool);}} onCommand={canvasCommand} mode={mode} onPreview={()=>{setResourceVisible(false);switchMode(mode==='preview'?'edit':'preview');}} onSave={()=>saveAll().catch(setError)} busy={busy||!project} zoom={Math.round((currentCanvasTab?(currentCanvasTab.view?.camera?.zoom||.5):(emptyCameras[projectId]?.zoom||.5))*100)} menuItems={canvasMenuItems}
-        navigation={navOpen&&<aside className="wb-navigation" style={{width:navWidth}} aria-label="项目文件面板"><header className="wb-floating-nav-head"><strong>项目资源</strong><Button aria-label="关闭文件面板" onClick={()=>setNavOpen(false)}><Icon name="x" size={15}/></Button></header><div className="wb-nav-tabs">{[['files','文件'],['layers','图层'],['pages','画板']].map(([id,label])=><Button key={id} aria-pressed={nav===id} onClick={()=>setNav(id)}>{label}</Button>)}</div><div className="wb-search"><input aria-label="搜索导航" placeholder="搜索…" value={query} onChange={e=>setQuery(e.target.value)}/></div><div className="wb-nav-body"><Navigation viewState={navigationViews[nav]||{}} onViewState={view=>setNavigationViews(values=>({...values,[nav]:view}))} nav={nav} workspace={workspace} design={design} query={query} active={currentCanvasTab||active} selection={selection} onOpen={openResource} onPage={openCanvas} onReference={addReference} onSelect={(s) => {
+</main> : <ProjectCanvasLayout onZoom={canvasPageId?action=>canvasControllers.current.get(currentCanvasTab?.id)?.changePreviewZoom(action):undefined} capturing={capturing} onScreenshot={canvasPageId?()=>canvasControllers.current.get(currentCanvasTab?.id)?.screenshot():undefined} conversationLayout={conversationLayout} onConversationWidthChange={setConversationWidth} designs={designs} designId={design?.id} workflowTabs={canvasSourceTabs} activeWorkflowId={currentSourceTab?.id} onSelectWorkflow={switchCanvasSource} onCloseWorkflow={closeCanvasSource} conversationOpen={aiOpen} onOpenConversation={()=>setAiOpen(true)} onSelectDesign={switchCanvasDesign} onCreateDesign={beginCanvasDesign} onImportDesign={()=>openCanvasSource('mastergo')} onReplicateWebsite={()=>openCanvasSource('website')} navOpen={navOpen} onToggleFiles={()=>{setNav('files');setNavOpen(v=>!v);}} tool={canvasTool} onTool={tool=>{setCanvasTool(tool);canvasControllers.current.get(currentCanvasTab?.id)?.setTool?.(tool);}} frozen={canvasFrozen} onFreeze={canvasPageId?()=>canvasControllers.current.get(currentCanvasTab?.id)?.toggleFreeze().catch(setError):undefined} busy={busy||!project}
+        navigation={navOpen&&<aside className="wb-navigation" style={{width:navWidth}} aria-label="项目文件面板"><div className="wb-nav-body"><Navigation viewState={navigationViews.files||{}} onViewState={view=>setNavigationViews(values=>({...values,files:view}))} nav="files" workspace={workspace} design={design} query="" active={currentCanvasTab||active} selection={selection} onOpen={async(file,keep)=>{
+          const page=!file.sourceId&&pages.find(item=>item.htmlPath===file.path&&!item.deletedAt);
+          if(page&&!keep){if(await saveAll()){openCanvas(page,true);setNavOpen(false);}return;}
+          return openResource(file,keep);
+        }} onPage={openCanvas} onReference={addReference} onSelect={(s) => {
     setSelection(s);
     if (currentCanvasTab) updateTab(currentCanvasTab.id, { selection: s });
     setResourceVisible(false);
@@ -1039,13 +1020,13 @@ function Workbench({ ctx, Canvas, api, onExit, legacy = {}, t }) {
   }} onForm={showForm} mutate={mutate} onOperation={(change) => {
     const controller = canvasControllers.current.get(active?.id);
     Promise.resolve(controller?.applyOperations ? controller.applyOperations(change) : canvasChange(change)).catch(setError);
-  }} /></div><div className="wb-row" style={{padding:9}}><Button onClick={()=>nav==='files'?showForm('file'):addCanvasPage()}>＋ {nav==='files'?'文件':'画板'}</Button></div><div role="separator" aria-orientation="vertical" aria-label="导航宽度" tabIndex={0} className="wb-resizer" onPointerDown={resizeNav} onKeyDown={e=>{if(e.key==='ArrowLeft')setNavWidth(w=>Math.max(220,w-10));if(e.key==='ArrowRight')setNavWidth(w=>Math.min(420,w+10));}}/></aside>} conversation={aiOpen&&project&&target?<AIPanel layout={conversationLayout.mode} onLayoutChange={setConversationMode} projects={library.projects||[]} knowledge={library.knowledge||[]} systems={library.systems||[]} nativeAccess={legacy?.nativeAccess} key={project.id} refreshToken={homeResult?.projectId===project.id?homeResult.result?.requestId:null} ctx={ctx} api={invoke} legacy={legacy} project={project} activeDesignId={design?.id||null} design={designs.find((d) => d.id === target.designId)} designs={designs} files={flattenFiles(workspace?.files || [])} pages={pages} target={target} canvasSelection={selection} onTarget={value=>{if(isActiveProject(project.id))setTarget(value);}} binding={binding} references={references} onReferences={value=>{if(isActiveProject(project.id))setReferences(value);}} onLocate={value=>{if(isActiveProject(project.id))locate(value);}} onError={value=>{if(isActiveProject(project.id))setError(value);}} onCompleted={() => {
+  }} /></div><div role="separator" aria-orientation="vertical" aria-label="导航宽度" tabIndex={0} className="wb-resizer" onPointerDown={resizeNav} onKeyDown={e=>{if(e.key==='ArrowLeft')setNavWidth(w=>Math.max(320,w-10));if(e.key==='ArrowRight')setNavWidth(w=>Math.min(480,w+10));}}/></aside>} conversation={aiOpen&&project&&target?<AIPanel layout={conversationLayout.mode} onLayoutChange={setConversationMode} projects={library.projects||[]} knowledge={library.knowledge||[]} systems={library.systems||[]} nativeAccess={legacy?.nativeAccess} key={project.id} refreshToken={homeResult?.projectId===project.id?homeResult.result?.requestId:null} ctx={ctx} api={invoke} legacy={legacy} project={project} activeDesignId={design?.id||null} design={designs.find((d) => d.id === target.designId)} designs={designs} files={flattenFiles(workspace?.files || [])} pages={pages} target={target} canvasSelection={selection} onClearSelection={ids=>canvasControllers.current.get(currentCanvasTab?.id)?.removeSelectionElements?.(Array.isArray(ids)?ids:[ids])} onTarget={value=>{if(isActiveProject(project.id))setTarget(value);}} binding={binding} references={references} onReferences={value=>{if(isActiveProject(project.id))setReferences(value);}} onLocate={value=>{if(isActiveProject(project.id))locate(value);}} onError={value=>{if(isActiveProject(project.id))setError(value);}} onCompleted={() => {
     if(isActiveProject(project.id))loadWorkspace(project.id).catch(setError);
     refreshLibrary().catch(setError);
   }} onHide={() => setAiOpen(false)} />:aiOpen?<div className="wb-canvas-loading-conversation" aria-label="AI 设计助手"><strong>✧ AI 设计助手</strong><span>{projectLoadErrors[projectId]?'项目加载失败，重新加载后恢复对话。':'正在连接项目对话…'}</span>{projectLoadErrors[projectId]&&<Button onClick={()=>openProject(projectId)}>重新加载项目</Button>}</div>:null}>
-        <div className="wb-canvas-surface"><div style={{display:currentSourceTab?'none':'flex',flex:1,minWidth:0,minHeight:0}}>{currentCanvasTab&&Canvas?renderCanvas(currentCanvasTab):<EmptyCanvas key={projectId} camera={emptyCameras[projectId]} tool={canvasTool} onTool={setCanvasTool} onCamera={camera=>setEmptyCameras(values=>({...values,[projectId]:camera}))} onController={controller=>{emptyCanvasController.current=controller;}} loading={busy&&!projectLoadErrors[projectId]} error={projectLoadErrors[projectId]} onRetry={()=>openProject(projectId)}/>}</div>{canvasSourceTabs.map(tab=><div key={tab.id} className="wb-canvas-workflow" role="tabpanel" aria-label={tab.name} hidden={currentSourceTab?.id!==tab.id} style={{display:currentSourceTab?.id===tab.id?'flex':'none'}}>{renderResource(tab)}</div>)}</div>
-        {resourceVisible&&resourceTabs.length>0&&<section className="wb-resource-window" aria-label="项目资源窗口"><header className="wb-resource-window-head"><div className="wb-tab-scroll" role="tablist" aria-label="项目资源">{resourceTabs.map(tab=><div role="tab" aria-selected={tabs.activeId===tab.id} className="wb-content-tab" key={tab.id}><button className="wb-tab-name" onClick={()=>activateTab(tab.id)}>{tab.name}{tab.dirty?' ●':''}</button><button aria-label={'关闭 '+tab.name} onClick={()=>closeTab(tab.id)}>×</button></div>)}</div><Button aria-label="关闭资源窗口，返回画布" onClick={()=>setResourceVisible(false)}><Icon name="x" size={16}/></Button></header><div className="wb-tabpanel">{resourceTabs.map(tab=><div key={tab.id} hidden={active?.id!==tab.id} data-resource-id={tab.id} style={{display:active?.id===tab.id?'flex':'none',flex:1,minWidth:0,minHeight:0}}>{renderResource(tab)}</div>)}</div></section>}
-      </ProjectCanvasLayout>}</WorkbenchShell>{newDesignProjectId&&<CanvasDesignDialog key={newDesignProjectId} projectId={newDesignProjectId} api={invoke} onClose={()=>setNewDesignProjectId(null)} onCreated={async({design:created})=>{const owner=newDesignProjectId;if(isActiveProject(owner)){const next=await loadWorkspace(owner);if(isActiveProject(owner)){const d=next?.designs?.find(item=>item.id===created.id);if(!d)throw errorValue('设计稿已创建，但列表未刷新，请重试。');const tab=designCanvasTab(owner,d,next.pages);setDesignId(d.id);dispatch({type:'open',keep:true,tab});setResourceVisible(false);setSelection(null);setTarget({projectId:owner,designId:d.id,pageId:tab.activePageId,scope:'design'});}}await refreshLibrary();}}/>}{modal && <WorkbenchDialogs key={`${modal.type}:${modal.projectId || modal.designId || modal.page?.id || ""}`} ctx={ctx} modal={modal} setModal={setModal} project={project} design={design} designs={designs} pages={pages} selection={selection} library={library} workspace={workspace} api={invoke} mutate={mutate} refreshLibrary={refreshLibrary} onOpenProject={openProject} onOpenFile={openResource} onOpenContent={openContent} onBeforeProjectExit={async () => {
+        <div className="wb-canvas-surface"><div style={{display:currentSourceTab?'none':'flex',flex:1,minWidth:0,minHeight:0}}>{currentCanvasTab&&Canvas?renderCanvas(currentCanvasTab):<EmptyCanvas key={projectId} loading={busy&&!projectLoadErrors[projectId]} error={projectLoadErrors[projectId]} onRetry={()=>openProject(projectId)}/>}</div>{canvasSourceTabs.map(tab=><div key={tab.id} className="wb-canvas-workflow" role="tabpanel" aria-label={tab.name} hidden={currentSourceTab?.id!==tab.id} style={{display:currentSourceTab?.id===tab.id?'flex':'none'}}>{renderResource(tab)}</div>)}</div>
+        {resourceVisible&&resourceTabs.length>0&&<section className="wb-resource-window" aria-label="项目资源窗口"><header className="wb-resource-window-head"><div className="wb-tab-scroll" role="tablist" aria-label="项目资源">{resourceTabs.map(tab=><div role="tab" aria-selected={tabs.activeId===tab.id} className="wb-content-tab" key={tab.id}><button className="wb-tab-name" onClick={()=>activateTab(tab.id)}>{tab.name}{tab.dirty?' ●':''}</button><button aria-label={'关闭 '+tab.name} onClick={()=>closeTab(tab.id)}>×</button></div>)}</div><Button aria-label="关闭资源窗口，返回预览" onClick={()=>setResourceVisible(false)}><Icon name="x" size={16}/></Button></header><div className="wb-tabpanel">{resourceTabs.map(tab=><div key={tab.id} hidden={active?.id!==tab.id} data-resource-id={tab.id} style={{display:active?.id===tab.id?'flex':'none',flex:1,minWidth:0,minHeight:0}}>{renderResource(tab)}</div>)}</div></section>}
+      </ProjectCanvasLayout>}</WorkbenchShell>{newDesignProjectId&&<CanvasDesignDialog key={newDesignProjectId} projectId={newDesignProjectId} api={invoke} onClose={()=>setNewDesignProjectId(null)} onCreated={async({design:created})=>{const owner=newDesignProjectId;if(isActiveProject(owner)){const next=await loadWorkspace(owner);if(isActiveProject(owner)){const d=next?.designs?.find(item=>item.id===created.id);if(!d)throw errorValue('设计稿已创建，但列表未刷新，请重试。');const tab=designCanvasTab(owner,d,next.pages);setDesignId(d.id);dispatch({type:'open',keep:true,tab});setResourceVisible(false);setSelection(null);setTarget({projectId:owner,designId:d.id,pageId:tab.activePageId,scope:'design'});}}await refreshLibrary();}}/>}{modal && <WorkbenchDialogs key={`${modal.type}:${modal.projectId || modal.designId || modal.page?.id || ""}`} ctx={ctx} modal={modal} setModal={setModal} project={project} design={design} designs={designs} pages={pages} selection={selection} library={library} workspace={workspace} api={invoke} mutate={mutate} refreshLibrary={refreshLibrary} onOpenProject={openProject} onOpenFile={openResource} onOpenContent={openContent} onOpenReplica={(page,created)=>openCanvas(page,true,created)} onBeforeProjectExit={async () => {
     if (!await saveAll()) return false;
     await flushView();
     return projectRef.current || true;
@@ -1072,6 +1053,7 @@ function Navigation({ viewState,onViewState,nav, workspace, design, query, activ
   const project = workspace?.project, files = flattenFiles(workspace?.files || []), pages = workspace?.pages || [], match = (s) => String(s || "").toLowerCase().includes(query.toLowerCase());
   const layerRoot=React.useRef(null);
   React.useEffect(()=>{if(nav!=='layers'||!layerRoot.current)return;const id=selection?.nodeIds?.[0];if(!id)return;const node=[...layerRoot.current.querySelectorAll('[data-layer-id]')].find(node=>node.dataset.layerId===id);if(!node)return;let ancestor=node.parentElement;while(ancestor&&ancestor!==layerRoot.current){if(ancestor.tagName==='DETAILS')ancestor.open=true;ancestor=ancestor.parentElement;}node.scrollIntoView({block:'nearest',inline:'nearest'});},[nav,active?.activePageId,selection?.nodeIds?.join('|'),workspace?.documents?.[active?.activePageId]]);
+  if (!project) return <p className="wb-muted" role="status">正在读取项目文件…</p>;
   if (nav === "pages") return <div className="wb-tree">{(workspace?.designs || []).map((d) => <details open key={d.id} onDragOver={(e) => {
     if (e.dataTransfer.types.includes("application/x-wb-design")) e.preventDefault();
   }} onDrop={(e) => {

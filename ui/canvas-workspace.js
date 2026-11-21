@@ -1,3 +1,5 @@
+import {requireHtml} from '../design-platform.js';
+import {resolvePlatform} from './home-project-options.js';
 import {resourceKey} from './tabs.js';
 import {orderedDesignPages} from './page-order.js';
 
@@ -24,19 +26,21 @@ export function canvasFirstState(projectId,designs,pages,restored,state={}) {
 }
 
 // A retry resumes the exact design/page already created, including refresh failures.
-export async function createCanvasDesign(api,{projectId,name,platform='web',artifactKind='html'},checkpoint={}) {
-  if(!['html','react','vue'].includes(artifactKind))throw new Error('请选择 HTML、React 或 Vue 产物类型。');
+export async function createCanvasDesign(api,{projectId,name,platform,artifactKind='html'},checkpoint={}) {
+  requireHtml(artifactKind);
   let project=(await api('project.get',{projectId})).project;
   let design=project.workbench?.designs?.find(d=>d.id===checkpoint.designId&&!d.deletedAt);
   if(checkpoint.designId&&!design)throw new Error('刚创建的设计稿已不可用，请关闭后重新创建。');
   let initialPage;
   if(!design){
-    const made=await api('design.create',{projectId,expectedRevision:project.revision,name:name.trim(),platform,...artifactKind!=='html'?{artifactKind}:{},binding:{mode:'inherit'}});
+    platform=await resolvePlatform(api,project.systemId,platform??project.platform);
+    const made=await api('design.create',{projectId,expectedRevision:project.revision,name:name.trim(),platform,binding:{mode:'inherit'}});
     design=made.design;checkpoint.designId=design.id;initialPage=made.page||made.artboard;
     project=made.project||(await api('project.get',{projectId})).project;
   }
   let page=initialPage||project.artboards?.find(p=>!p.deletedAt&&p.designId===design.id);
   if(!page){
+    platform=design.platform;
     const made=await api('page.create',{projectId,designId:design.id,expectedRevision:project.revision,name:platform==='mobile'?'移动端页面':'首页',viewport:platform==='mobile'?{width:390,height:844}:{width:1440,height:1000}});
     page=made.page;checkpoint.pageId=page.id;
   }

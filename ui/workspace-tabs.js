@@ -28,6 +28,6 @@ export function workspaceTabsReducer(state=initialWorkspaceTabs,action={}){
 export function projectWorkspaceTab(project){return {id:`project:${project.id}`,kind:'project',projectId:project.id,label:project.name||'未命名项目',icon:'layers',closable:true};}
 export function projectSettingsTab(project){return {id:`project-settings:${project.id}`,kind:'project-settings',projectId:project.id,label:`${project.name||'项目'} · 设置`,icon:'settings',closable:true};}
 export function globalWorkspaceTab(id){
-  const definition={home:HOME_TAB,projects:{kind:'manager',label:'项目',icon:'folder'},systems:{kind:'systems',label:'设计体系',icon:'palette'},knowledge:{kind:'knowledge',label:'知识库',icon:'library'},skills:{kind:'skills',label:'技能库',icon:'wand'},settings:{kind:'settings',label:'设置',icon:'settings'}}[id];
+  const definition={home:HOME_TAB,projects:{kind:'manager',label:'项目',icon:'folder'},systems:{kind:'systems',label:'设计体系',icon:'palette'},knowledge:{kind:'knowledge',label:'知识库',icon:'knowledge'},skills:{kind:'skills',label:'技能库',icon:'skill'},settings:{kind:'settings',label:'设置',icon:'settings'}}[id];
   return definition?{id,closable:id!=='home',...definition}:null;
 }

@@ -3,7 +3,7 @@ import {wheelNavigation,pinchNavigation} from './canvas-navigation.js';
 
 const editable='input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"]';
 const control='button,a[href],input,textarea,select,[contenteditable]:not([contenteditable="false"])';
-export default function useCanvasNavigation({root,cameraRef,onCamera,hand=false,onTool,onClear,onFit,onZoom,enabled=true}){
+export default function useCanvasNavigation({root,cameraRef,onCamera,hand=false,onTool,onClear,onFit,onZoom,panWheel=false,enabled=true}){
   const latest=React.useRef(null),drag=React.useRef(null),touches=React.useRef(new Map()),inside=React.useRef(false);
   const [space,setSpace]=React.useState(false),[dragging,setDragging]=React.useState(false);
   latest.current={onCamera,hand,onTool,onClear,onFit,onZoom,space};
@@ -11,7 +11,7 @@ export default function useCanvasNavigation({root,cameraRef,onCamera,hand=false,
   const reset=React.useCallback(()=>{setSpace(false);stop();},[stop]);
   React.useEffect(()=>{
     const node=root.current;if(!node||!enabled)return;
-    const wheel=event=>{if(event.target.closest(editable))return;event.preventDefault();event.stopPropagation();if(!drag.current)latest.current.onCamera(wheelNavigation(cameraRef.current,event,node.getBoundingClientRect()));};
+    const wheel=event=>{if(event.target.closest(editable))return;event.preventDefault();event.stopPropagation();if(!drag.current)latest.current.onCamera(wheelNavigation(cameraRef.current,event,node.getBoundingClientRect(),panWheel));};
     const keydown=event=>{
       if(event.isComposing||event.target.closest?.(editable)||event.target.closest?.('[role="dialog"]'))return;
       if(!node.contains(event.target)&&!(inside.current&&event.target===document.body)&&!event.target.closest?.('.wb-canvas-tools'))return;
@@ -27,7 +27,7 @@ export default function useCanvasNavigation({root,cameraRef,onCamera,hand=false,
     node.addEventListener('wheel',wheel,{passive:false});
     window.addEventListener('keydown',keydown);window.addEventListener('keyup',keyup);window.addEventListener('blur',blur);
     return()=>{node.removeEventListener('wheel',wheel);window.removeEventListener('keydown',keydown);window.removeEventListener('keyup',keyup);window.removeEventListener('blur',blur);drag.current=null;touches.current.clear();};
-  },[root,cameraRef,enabled,stop]);
+  },[root,cameraRef,enabled,panWheel,stop]);
   const start=(event,capture)=>{
     if(!enabled||event.target.closest(editable))return;
     const node=root.current,panTool=hand||space,middle=event.button===1,touch=event.pointerType==='touch';

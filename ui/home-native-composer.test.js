@@ -8,6 +8,7 @@ function fixture(){
   let project={id:`p-home-native-${++nextId}`,name:'Draft',revision:1,workbench:{initializedAt:'now'}},stored={},version=null,binding={mode:'none'},reject=true,rejectConsume=false;
   const f={calls,sessionId,get project(){return project;},get stored(){return stored;},allow(){reject=false;},failConsume(){rejectConsume=true;},async api(action,args){
     calls.push({action,args:structuredClone(args)});
+    if(action==='system.get')return {platforms:['web']};
     if(action==='project.create'||action==='project.get')return {project:structuredClone(project)};
     if(action==='composer.adopt'){assert.equal(args.sessionId,sessionId);if(!project.aiSessionId)project={...project,aiSessionId:sessionId,revision:project.revision+1};return {project:structuredClone(project),sessionId};}
     if(action==='design.create'){assert.equal(args.expectedRevision,project.revision);binding=args.binding;project={...project,revision:project.revision+1};return {project:structuredClone(project),design:{id:'d-home-native'}};}
@@ -34,7 +35,7 @@ test('home keeps the actual selected Session, native receipts, pinned system and
   const submit=f.calls.find(c=>c.action==='ai.run').args;
   assert.deepEqual(submit.attachments,[receipt]);assert.equal(submit.references[0].projectId,f.project.id);assert.equal(submit.references[0].referencedProjectId,'p-reference');
   assert.deepEqual(submit.target,{projectId:f.project.id,designId:'d-home-native',scope:'design'});assert.deepEqual(submit.frozenTarget,submit.target);
-  assert.deepEqual(f.calls.find(c=>c.action==='design.create').args.binding,{mode:'independent',systemId:'s-one',version:2});
+  assert.deepEqual(f.calls.find(c=>c.action==='design.create').args.binding,{mode:'independent',systemId:'s-one'});
   assert.equal(f.stored.prompt,'');assert.deepEqual(f.stored.attachments,[]);
 });
 
@@ -45,7 +46,7 @@ test('editing an unaccepted home attempt reuses saved identities and receipts in
   f.allow();await startHomeDesign(f.api,'Edited prompt',{...options,checkpoint,systemChoice:{systemId:'s-selected',version:3}});
   assert.equal(f.calls.filter(c=>c.action==='project.create').length,1);assert.equal(f.calls.filter(c=>c.action==='design.create').length,1);
   const submissions=f.calls.filter(c=>c.action==='ai.run');assert.equal(submissions[1].args.prompt,'Edited prompt');assert.deepEqual(submissions[1].args.attachments,submissions[0].args.attachments);
-  assert.deepEqual(f.calls.find(c=>c.action==='binding.set').args.binding,{mode:'independent',systemId:'s-selected',version:3});
+  assert.deepEqual(f.calls.find(c=>c.action==='binding.set').args.binding,{mode:'independent',systemId:'s-selected'});
 });
 
 test('a new canvas owner editing during home admission keeps its next generation after acceptance',async()=>{

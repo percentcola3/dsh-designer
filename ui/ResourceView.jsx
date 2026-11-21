@@ -20,7 +20,7 @@ class PDFBoundary extends React.Component{
   componentDidCatch(error){this.props.onError?.(Object.assign(new Error('PDF 阅读器暂不可用，请刷新工作台后重试。'),{code:'PDF_READER_UNAVAILABLE',cause:error}));}
   render(){return this.state.error?<Empty title="PDF 阅读器暂不可用"><p>请刷新工作台后重试，或下载原件查看。</p></Empty>:this.props.children;}
 }
-import { Button, Empty, ErrorBox, FieldError, downloadValue } from "./common.jsx";
+import { Button, Empty, ErrorBox, FieldError, useDownload } from "./common.jsx";
 const extensions = (path) => {
   const ext = (path || "").split(".").pop().toLowerCase();
   return ext === "html" || ext === "svg" ? html() : ext === "css" ? css() : ["js", "jsx", "ts", "tsx", "mjs"].includes(ext) ? javascript({ typescript: ["ts", "tsx"].includes(ext), jsx: ["jsx", "tsx"].includes(ext) }) : ext === "md" ? markdown() : ext === "json" ? json() : [];
@@ -90,7 +90,7 @@ function DiffView({ before, after, path }) {
   }, [before, after, path]);
   return <div className="wb-source" ref={host} />;
 }
-function MarkdownView({ content, viewState, onViewState, onLink, resolveAsset, onError }) {
+function MarkdownView({ content, viewState, onViewState, onLink, resolveAsset, onError, showOutline = true }) {
   const root = React.useRef(null);
   const rendered = React.useMemo(() => {
     const sanitized = DOMPurify.sanitize(marked.parse(content || "", { gfm: true, breaks: false }));
@@ -132,10 +132,10 @@ function MarkdownView({ content, viewState, onViewState, onLink, resolveAsset, o
     });
     root.current.scrollTop = viewState?.readScroll || 0;
   }, [rendered]);
-  return <><nav className="wb-heading-nav" aria-label="文档标题">{headings.map((h) => <a key={h.id} href={`#${h.id}`} style={{ paddingLeft: (h.level - 1) * 8 }} onClick={(e) => {
+  return <>{showOutline && <nav className="wb-heading-nav" aria-label="文档标题">{headings.map((h) => <a key={h.id} href={`#${h.id}`} style={{ paddingLeft: (h.level - 1) * 8 }} onClick={(e) => {
     e.preventDefault();
     root.current.querySelector(`#${h.id}`)?.scrollIntoView({ block: "start" });
-  }}>{h.text}</a>)}</nav><article ref={root} className="wb-render" onClick={(e) => {
+  }}>{h.text}</a>)}</nav>}<article ref={root} className="wb-render" onClick={(e) => {
     const a = e.target.closest("a[href]");
     if (!a) return;
     const href = a.getAttribute("href");
@@ -191,7 +191,8 @@ function ImageView({ url, name, viewState = {}, onViewState, onMetadata, onError
     onMetadata?.(s);
   }} style={{ display: paused ? "none" : "block", width: size.width ? size.width * zoom : void 0, transform: `translate(${pan.x}px,${pan.y}px)` }} /><canvas ref={canvas} style={{ display: paused ? "block" : "none", width: size.width * zoom, transform: `translate(${pan.x}px,${pan.y}px)` }} /></div></>;
 }
-function ResourceView({ tab, onUpdate, onSave, onReference, api, projectId, onOpenFile, onRefresh, onHistoryAction, onAssetAction, onReconcile, onSetTarget, canSetTarget = true }) {
+function ResourceView({ tab, onUpdate, onSave, onReference, api, projectId, onOpenFile, onRefresh, onHistoryAction, onAssetAction, onReconcile, onSetTarget, canSetTarget = true, hideToolbar = false, showOutline = true, resolveAsset }) {
+  const downloadValue=useDownload();
   const [error, setError] = React.useState(null), [metadata, setMetadata] = React.useState({}), [history, setHistory] = React.useState(null), [diff, setDiff] = React.useState(null), [loading, setLoading] = React.useState(false), mediaRef = React.useRef(null);
   const handleLink = (href) => {
     try {
@@ -250,7 +251,8 @@ function ResourceView({ tab, onUpdate, onSave, onReference, api, projectId, onOp
     const policy = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob: https: http:; style-src 'unsafe-inline' https: http:; font-src data: https: http:; form-action 'none'; base-uri ${location.origin};">${base}`;
     return /<head\b[^>]*>/i.test(html2) ? html2.replace(/<head\b[^>]*>/i, (m) => m + policy) : policy + html2;
   }, [kind, content, tab.assetBase]);
-  const renderContent = () => kind === "markdown" ? <MarkdownView content={content} viewState={tab.view} onViewState={updateView} onLink={handleLink} onError={setError} resolveAsset={async (href) => {
+  const renderContent = () => kind === "markdown" ? <MarkdownView showOutline={showOutline} content={content} viewState={tab.view} onViewState={updateView} onLink={handleLink} onError={setError} resolveAsset={async (href) => {
+    if (resolveAsset) return resolveAsset(href);
     if (tab.resolveMap) {
       const logicalPath = systemLogicalPath(tab.logicalPath || tab.path || "", href), entry = tab.resolveMap[logicalPath];
       if (!entry) throw Object.assign(new Error("固定版本资料缺少精确资源：" + logicalPath), { code: "SYSTEM_RESOURCE_MISSING" });
@@ -271,14 +273,14 @@ function ResourceView({ tab, onUpdate, onSave, onReference, api, projectId, onOp
   }} /> : <iframe title={tab.name} className="wb-document-frame" sandbox="" src={tab.systemId ? tab.previewUrl : void 0} srcDoc={tab.systemId && tab.previewUrl ? void 0 : renderedHTML} />;
   const download = async () => {
     try {
-      if (tab.downloadUrl || url) downloadValue({ url: tab.downloadUrl || url, name: tab.name });
-      else if (text) downloadValue({ content, name: tab.name, mimeType: tab.mimeType });
-      else downloadValue(await api("asset.copy", { projectId, fileId: tab.resourceId, path: tab.path, external: true }), tab.name);
+      if (tab.downloadUrl || url) await downloadValue({ url: tab.downloadUrl || url, name: tab.name });
+      else if (text) await downloadValue({ content, name: tab.name, mimeType: tab.mimeType });
+      else await downloadValue(await api("asset.copy", { projectId, fileId: tab.resourceId, path: tab.path, external: true }), tab.name);
     } catch (e) {
       setError(e);
     }
   };
-  return <div className="wb-resource"><div className="wb-resource-bar"><span className="wb-grow wb-ellipsis" title={tab.path}>{tab.path || tab.name}</span>{tab.reconciling && <span className="wb-chip" role="status">正在协调资源…</span>}{text && <><Button aria-pressed={mode === "source"} onClick={() => setMode("source")}>源码</Button><Button aria-pressed={mode === "render" || mode === "read"} onClick={() => setMode(kind === "markdown" ? "read" : "render")}>阅读 / 渲染</Button><Button aria-pressed={mode === "split"} onClick={() => setMode("split")}>分栏</Button><Button disabled={tab.reconciling || tab.readonly || !tab.dirty} onClick={() => onSave(tab)}>保存</Button>{projectId && tab.type === "file" && !tab.sourceId && <><Button onClick={async () => {
+  return <div className="wb-resource">{!hideToolbar && <div className="wb-resource-bar"><span className="wb-grow wb-ellipsis" title={tab.path}>{tab.path || tab.name}</span>{tab.reconciling && <span className="wb-chip" role="status">正在协调资源…</span>}{text && <><Button aria-pressed={mode === "source"} onClick={() => setMode("source")}>源码</Button><Button aria-pressed={mode === "render" || mode === "read"} onClick={() => setMode(kind === "markdown" ? "read" : "render")}>阅读 / 渲染</Button><Button aria-pressed={mode === "split"} onClick={() => setMode("split")}>分栏</Button><Button disabled={tab.reconciling || tab.readonly || !tab.dirty} onClick={() => onSave(tab)}>保存</Button>{projectId && tab.type === "file" && !tab.sourceId && <><Button onClick={async () => {
     try {
       await onRefresh?.(tab);
     } catch (e) {
@@ -299,7 +301,7 @@ function ResourceView({ tab, onUpdate, onSave, onReference, api, projectId, onOp
   }}>源码保存点</Button>}{tab.viewerReadonly && !tab.permissionReadonly && <Button onClick={() => onUpdate({ viewerReadonly: false, readonly: false })}>编辑此本地资源</Button>}{onSetTarget && tab.type === "file" && <Button disabled={!canSetTarget || (tab.permissionReadonly ?? tab.readonly)} title={!canSetTarget ? "此资源只读或路径不在允许修改的登记范围内" : "只有明确点击才会授权本轮修改此文件"} onClick={() => onSetTarget(tab)}>设为本轮修改目标</Button>}{onReference && !tab.receiptId && <Button disabled={kind==='pdf'&&metadata.status!=='ready'} title={kind==='pdf'?'引用当前实际显示的 PDF 页':'引用当前文件'} onClick={() => onReference({ type: "file", resourceId: tab.resourceId, path: tab.path, label: tab.name, sourceVersion: tab.version, sourceId: tab.sourceId, pageNumber: kind === "pdf" ? tab.view?.page || 1 : void 0 })}>引用</Button>}{onAssetAction && tab.type === "file" && !tab.sourceId && <><Button onClick={() => onAssetAction("copy", tab)}>复制资源</Button><Button disabled={tab.reconciling || tab.readonly} onClick={() => onAssetAction("replace", tab)}>替换资源</Button></>}{!text && onRefresh && <Button onClick={() => {
     setError(null);
     onRefresh(tab).catch(setError);
-  }}>刷新资源</Button>}{kind === "pdf" && url && <a href={url} target="_blank" rel="noopener noreferrer">外部打开 PDF ↗</a>}<Button onClick={download}>下载原件</Button></div><ErrorBox error={error || tab.error} onClose={() => setError(null)} context="文件操作"/><FieldError error={svgError} context={`${tab.name || '当前文件'} · SVG 语法`}/>{tab.conflict && <div className="wb-stack" style={{ padding: 10, borderBottom: "1px solid var(--wb-border)" }}><strong>文件已在外部改变，保留了本地草稿</strong><div className="wb-row"><Button onClick={() => setDiff({ before: tab.conflict.remoteContent, after: tab.content })}>比较远端与草稿</Button><Button disabled={tab.reconciling || tab.readonly || !onReconcile} onClick={() => onReconcile("keep-local", tab, tab.content).catch(setError)}>明确保留本地并保存新版本</Button><Button disabled={tab.reconciling || tab.readonly || !onReconcile} onClick={() => onReconcile("adopt-external", tab).catch(setError)}>明确采用外部版本</Button><Button disabled={tab.reconciling || tab.readonly || !onReconcile} onClick={() => onReconcile("merge", tab, tab.content).catch(setError)}>将当前编辑内容保存为合并版本</Button></div></div>}{diff && <div style={{ height: 300, minHeight: 200, display: "flex", flexDirection: "column", borderBottom: "1px solid var(--wb-border)" }}><div className="wb-resource-bar"><strong className="wb-grow">保存版本 / 本地内容</strong><Button onClick={() => setDiff(null)}>关闭差异</Button></div><DiffView before={diff.before} after={diff.after} path={tab.path} /></div>}{history && <div style={{ maxHeight: 220, overflow: "auto", padding: 10, borderBottom: "1px solid var(--wb-border)" }}><div className="wb-row"><strong className="wb-grow">文件版本</strong><Button onClick={() => setHistory(null)}>关闭</Button></div>{(history.entries || history.history || history.versions || []).map((h, i) => <div className="wb-row" key={h.id || h.version || i}><span className="wb-grow">{h.summary || h.version || h.id} {h.createdAt || ""}</span><Button onClick={async () => {
+  }}>刷新资源</Button>}{kind === "pdf" && url && <a href={url} target="_blank" rel="noopener noreferrer">外部打开 PDF ↗</a>}<Button onClick={download}>下载原件</Button></div>}<ErrorBox error={error || tab.error} onClose={() => setError(null)} context="文件操作"/><FieldError error={svgError} context={`${tab.name || '当前文件'} · SVG 语法`}/>{tab.conflict && <div className="wb-stack" style={{ padding: 10, borderBottom: "1px solid var(--wb-border)" }}><strong>文件已在外部改变，保留了本地草稿</strong><div className="wb-row"><Button onClick={() => setDiff({ before: tab.conflict.remoteContent, after: tab.content })}>比较远端与草稿</Button><Button disabled={tab.reconciling || tab.readonly || !onReconcile} onClick={() => onReconcile("keep-local", tab, tab.content).catch(setError)}>明确保留本地并保存新版本</Button><Button disabled={tab.reconciling || tab.readonly || !onReconcile} onClick={() => onReconcile("adopt-external", tab).catch(setError)}>明确采用外部版本</Button><Button disabled={tab.reconciling || tab.readonly || !onReconcile} onClick={() => onReconcile("merge", tab, tab.content).catch(setError)}>将当前编辑内容保存为合并版本</Button></div></div>}{diff && <div style={{ height: 300, minHeight: 200, display: "flex", flexDirection: "column", borderBottom: "1px solid var(--wb-border)" }}><div className="wb-resource-bar"><strong className="wb-grow">保存版本 / 本地内容</strong><Button onClick={() => setDiff(null)}>关闭差异</Button></div><DiffView before={diff.before} after={diff.after} path={tab.path} /></div>}{history && <div style={{ maxHeight: 220, overflow: "auto", padding: 10, borderBottom: "1px solid var(--wb-border)" }}><div className="wb-row"><strong className="wb-grow">文件版本</strong><Button onClick={() => setHistory(null)}>关闭</Button></div>{(history.entries || history.history || history.versions || []).map((h, i) => <div className="wb-row" key={h.id || h.version || i}><span className="wb-grow">{h.summary || h.version || h.id} {h.createdAt || ""}</span><Button onClick={async () => {
     try {
       const value = await api("file.read", { projectId, fileId: tab.resourceId, path: tab.path, sourceId: tab.sourceId, revisionId: h.id, version: h.version || h.id });
       setDiff({ before: value.content ?? value.text ?? "", after: tab.content });

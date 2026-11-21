@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {freezeAISubmission,confirmationIsCurrent,confirmedPayload} from './ai-confirmation.js';
+import {labelSelection} from '../editor/selection-labels.js';
 import {sourceTemplateConfirmation} from './target-state.js';
 const snapshot={prompt:'修改移动端',target:{projectId:'p',designId:'mobile',scope:'design',scopeChoice:{id:'one'}},references:[{type:'directory',rootPath:'/knowledge',readonly:true}],attachments:[],binding:{systemId:'brand',version:3}};
 const input={projectId:'p',projectRevision:4,activeDesignId:'web',prompt:snapshot.prompt,target:snapshot.target,references:snapshot.references,attachments:[]};
@@ -24,13 +25,13 @@ test('repeating history uses a guard for the current draft and does not consume 
 function sourceSnapshot(){
  const artifact={kind:'react',entry:'designs/mobile/source-a/App.jsx',version:7,buildId:'build-7'},locator={id:'source-button',path:artifact.entry,tag:'button',start:35,end:100,line:2,column:6,sourceHash:'a'.repeat(64)};
  const objects=[1,2].map(i=>({id:`runtime-${i}`,instanceId:`runtime-${i}`,nodeId:`runtime-${i}`,sourceNodeId:locator.id,sourceLocator:locator,artifact,documentEpoch:'document-7',renderEpoch:4,sceneId:'query',outerHTML:`<button>${'完整元素'.repeat(7000)} ${i}</button>`}));
- const selection={pageId:'a',artifact,documentEpoch:'document-7',renderEpoch:4,sceneId:'query',nodeIds:objects.map(row=>row.nodeId),objects};
+ const selection=labelSelection({pageId:'a',artifact,documentEpoch:'document-7',renderEpoch:4,sceneId:'query',nodeIds:objects.map(row=>row.nodeId),objects});
  return {...structuredClone(snapshot),selection,target:{projectId:'p',designId:'mobile',pageId:'a',scope:'selection',nodeIds:['runtime-1','runtime-2'],sourceTemplateConfirmed:sourceTemplateConfirmation(selection)}};
 }
 
 test('framework submission freezes full elements, manifest locators and artifact while separating source and runtime IDs',()=>{
  const snap=sourceSnapshot(),result=freezeAISubmission({snapshot:snap,projectId:'p',activeDesignId:'mobile',sessionId:'session-p'});
- assert.equal(result.mode,'edit');assert.deepEqual(result.target.nodeIds,['source-button']);assert.deepEqual(result.target.runtimeNodeIds,['runtime-1','runtime-2']);assert.deepEqual(result.selection,snap.selection);assert.deepEqual(result.frozenTarget,result.target);assert.ok(result.selection.objects[0].outerHTML.length>12000);
+ assert.deepEqual(result.selection.objects.map(object=>object.selectionLabel),['A','B']);assert.equal(result.mode,'edit');assert.deepEqual(result.target.nodeIds,['source-button']);assert.deepEqual(result.target.runtimeNodeIds,['runtime-1','runtime-2']);assert.deepEqual(result.selection,snap.selection);assert.deepEqual(result.frozenTarget,result.target);assert.ok(result.selection.objects[0].outerHTML.length>12000);
  result.selection.objects[0].outerHTML='changed';result.selection.objects[0].sourceLocator.path='elsewhere.jsx';assert.notEqual(snap.selection.objects[0].outerHTML,'changed');assert.equal(snap.selection.objects[0].sourceLocator.path,snap.selection.artifact.entry);
 });
 

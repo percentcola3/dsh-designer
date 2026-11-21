@@ -333,3 +333,31 @@ test('unregistered sibling-project aliases cannot reinterpret one project ID as 
   const bRoot=await f.store.projectPhysicalRoot(b.id);f.fs.seed(path.join(bRoot,'private.md'),'B only');f.fs.aliases.set(path.join(f.store.root,'projects',a.id),bRoot);
   await assert.rejects(f.store.target(`projects/${a.id}/private.md`),errorCode('PATH_OUTSIDE_WORKSPACE','PROJECT_SCOPE'));
 });
+
+test('website replication saves the frozen DOM and its assets in a separate design and reopens it on retry without AI',async t=>{
+  const f=fixture(t),{projectId,page}=await createPage(f),sources=new SourceWorkflows(f.owner),env=userEnv(f);
+  const {project}=await f.store.projectGet(projectId);
+  const planned=await sources.plan({projectId,expectedRevision:project.revision,kind:'website',url:'https://example.com/'},env);
+  const asset='assets/i-observed/images/logo.svg';
+  const capture={id:'xc-observed',pageId:planned.source.pages[0].id,viewportId:'desktop',stateId:'success',
+    title:'预约成功',width:1440,height:900,url:'https://example.com/',html:'<!doctype html><html><body><img src="../'+asset+'"><p>已预约：上午场</p></body></html>',
+    nodes:[],regions:[],resources:[{path:asset}],status:'observed'};
+  await f.store.write('projects/'+projectId+'/'+asset,'<svg xmlns="http://www.w3.org/2000/svg"/>',null,undefined,f.policy);
+  const frozen=await sources.finishVersion(planned.project,planned.source,[capture],{...env,user:false});
+  const input={action:'workbench.source.replicate',projectId,designId:page.designId,sourceId:planned.source.id,
+    versionId:frozen.version.id,captureId:capture.id,expectedRevision:frozen.projectRevision};
+  f.owner.runAI=()=>assert.fail('Replication must not create a model request');
+  const saved=await sources.execute(input,env),retry=await sources.execute(input,env);
+  assert.notEqual(saved.design.id,page.designId);
+  assert.equal(saved.page.designId,saved.design.id);
+  assert.equal(saved.page.htmlPath,saved.design.folder+'/index.html');
+  assert.deepEqual(saved.design.pageIds,[saved.page.id]);
+  const after=(await f.store.projectGet(projectId)).project;
+  assert.deepEqual(after.workbench.designs.find(item=>item.id===page.designId),project.workbench.designs.find(item=>item.id===page.designId));
+  assert.equal(retry.page.id,saved.page.id);
+  assert.equal(retry.projectRevision,saved.projectRevision);
+  const copy=await f.store.artboardGet(projectId,saved.page.id);
+  assert.ok(copy.html.includes('已预约：上午场'));
+  assert.ok(copy.html.includes('src="assets/images/logo.svg"'));
+  assert.ok(await f.fs.stat(await f.store.target('projects/'+projectId+'/'+saved.design.folder+'/assets/images/logo.svg')));
+});

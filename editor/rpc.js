@@ -1,6 +1,6 @@
 export const FRAME_CHANNEL='dsh-workbench-frame';
-export const VIEW_COMMANDS=new Set(['hitTest','measure','boxSelect','parent','scroll','restoreScroll','locate','mode','scene','elementState','formState','reset','state','element.read','source.instances']);
-const eventKinds=new Set(['ready','scroll','layout','diagnostic','navigate']);
+export const VIEW_COMMANDS=new Set(['reference.measure','freeze','patchSource','captureState','captureScreenshotState','snapGuides','previewPosition','hitTest','measure','boxSelect','parent','scroll','restoreScroll','locate','mode','reset','state','element.read','source.instances']);
+const eventKinds=new Set(['canvasWheel','toggleFreeze','screenshot','pageActive','ready','scroll','layout','diagnostic','navigate','exitPreview']);
 export const frameError=(code,message)=>Object.assign(new Error(message),{code});
 export const lifecycleError=error=>['FRAME_CLOSED','FRAME_RELOADED'].includes(error?.code);
 export function authenticatedPacket(event,{source,token,pageId}){const packet=event?.data;if(!source||event.source!==source||packet?.channel!==FRAME_CHANNEL||packet.token!==token||packet.pageId!==pageId)return null;if(packet.kind==='response'&&typeof packet.requestId==='string'||eventKinds.has(packet.kind))return packet;return null}

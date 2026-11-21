@@ -1,4 +1,5 @@
 import React from 'react';
+import {Icon} from './brand.jsx';
 import {createFileTree, flattenFileTree, orderFileTree, reconcileFileViewState, reorderFileView, searchFileTree, visibleFileNodes} from './file-tree.js';
 
 const EMPTY_VIEW = {};
@@ -24,7 +25,7 @@ export default function FileNavigation({files = [], query = '', viewState, onVie
   const visible = visibleFileNodes(shown, expanded);
   const [focusedId, setFocusedId] = React.useState(null), [selectedId, setSelectedId] = React.useState(null);
   const [drop, setDrop] = React.useState(null), [dragging, setDragging] = React.useState(false);
-  const root = React.useRef(null), items = React.useRef(new Map()), drag = React.useRef(null), pointer = React.useRef(null);
+  const root = React.useRef(null), items = React.useRef(new Map()), drag = React.useRef(null);
   const helpId = React.useId();
   const focusId = visible.some(node => node.id === focusedId) ? focusedId : visible[0]?.id;
   const emit = next => { setLocalView(next); onViewState?.(next); };
@@ -55,11 +56,7 @@ export default function FileNavigation({files = [], query = '', viewState, onVie
     const box = element.getBoundingClientRect(), target = {id, after: y > box.top + box.height / 2};
     setDrop(target); return target;
   };
-  const finishDrag = () => {drag.current = null; pointer.current = null; setDrop(null); setDragging(false);};
-  const pointerTarget = event => {
-    const row = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-file-navigation-row]');
-    return row && root.current?.contains(row) ? dropAt(row.dataset.fileNavigationRow, event.clientY, row) : (setDrop(null), null);
-  };
+  const finishDrag = () => {drag.current = null; setDrop(null); setDragging(false);};
   const keyboard = (event, node) => {
     if (event.target !== event.currentTarget) return;
     const index = visible.findIndex(item => item.id === node.id), isOpen = expanded.includes(node.id);
@@ -83,13 +80,12 @@ export default function FileNavigation({files = [], query = '', viewState, onVie
   const render = (nodes, level = 1) => nodes.map((node, index) => {
     const isDirectory = node.kind !== 'file', isOpen = expanded.includes(node.id), readonly = !!node.file?.readonly;
     return <div key={node.id} role="treeitem" aria-label={`${node.name}${node.duplicateName ? ` · ${node.location}` : ''}${readonly ? ' · 只读' : ''}`} aria-level={level} aria-posinset={index + 1} aria-setsize={nodes.length} aria-expanded={isDirectory ? isOpen : undefined} aria-selected={selectedId === node.id} aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown Shift+Enter" tabIndex={focusId === node.id ? 0 : -1} ref={element => {if (element) items.current.set(node.id, element); else items.current.delete(node.id);}} style={{outline: 'none'}} onFocus={event => {if (event.target === event.currentTarget) setFocusedId(node.id);}} onKeyDown={event => keyboard(event, node)}>
-      <div className="wb-nav-item" data-file-navigation-row={node.id} title={[node.location || [node.sourceId, node.path].filter(Boolean).join(' · '), readonly && '只读', node.file?.registered === true && '已登记'].filter(Boolean).join(' · ')} style={{paddingLeft: 7 + (level - 1) * 14, gap: 5, background: selectedId === node.id ? 'var(--wb-soft)' : undefined, boxShadow: focusedId === node.id ? 'inset 0 0 0 1px var(--wb-accent)' : undefined, borderTop: drop?.id === node.id && !drop.after ? '2px solid var(--wb-accent)' : '2px solid transparent', borderBottom: drop?.id === node.id && drop.after ? '2px solid var(--wb-accent)' : '2px solid transparent'}} draggable onClick={event => {event.stopPropagation(); focus(node.id); if (!dragging && (!event.detail || event.detail === 1)) open(node, false);}} onDoubleClick={event => {event.stopPropagation(); if (!isDirectory && !dragging) {focus(node.id); open(node, true);}}} onDragStart={event => {event.stopPropagation(); drag.current = node.id; setDragging(true); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData(DRAG_TYPE, node.id);}} onDragOver={event => {event.stopPropagation(); if (canDrop(drag.current, node.id)) {event.preventDefault(); event.dataTransfer.dropEffect = 'move'; dropAt(node.id, event.clientY, event.currentTarget);} else setDrop(null);}} onDrop={event => {event.preventDefault(); event.stopPropagation(); const target = dropAt(node.id, event.clientY, event.currentTarget); if (target) reorder(drag.current, target.id, target.after); finishDrag();}} onDragEnd={finishDrag}>
-        <span aria-hidden="true" style={{flexShrink: 0}}>{isDirectory ? (isOpen ? '▾' : '▸') : '⌑'}</span>
-        <span className="wb-grow" style={{display: 'flex', flexDirection: 'column'}}><span>{node.name}</span>{node.duplicateName && <small className="wb-muted wb-ellipsis">{node.location}</small>}</span>
-        {readonly && <small className="wb-muted" style={{flexShrink: 0}}>只读</small>}
-        {node.file?.registered === true && <small className="wb-muted">已登记</small>}
-        {!isDirectory && onReference && <button type="button" className="wb-button" tabIndex={-1} aria-label={`引用 ${node.name} · ${node.location}`} title="引用文件（Shift+Enter）" style={{padding: '0 5px', minHeight: 24}} onClick={event => {event.stopPropagation(); focus(node.id); onReference(node.file);}} onDoubleClick={event => event.stopPropagation()}>↗</button>}
-        <button type="button" className="wb-button" tabIndex={-1} draggable={false} aria-label={`调整 ${node.name} 的显示顺序`} title="拖动调整同目录显示顺序；Alt+↑/↓" style={{padding: '0 4px', minHeight: 24, cursor: 'grab', touchAction: 'none', flexShrink: 0}} onClick={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()} onPointerDown={event => {if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); focus(node.id); drag.current = node.id; pointer.current = {x: event.clientX, y: event.clientY, moved: false}; event.currentTarget.setPointerCapture(event.pointerId);}} onPointerMove={event => {const p = pointer.current; if (!p) return; if (!p.moved && Math.hypot(event.clientX - p.x, event.clientY - p.y) < 5) return; p.moved = true; setDragging(true); pointerTarget(event);}} onPointerUp={event => {if (!pointer.current) return; if (pointer.current.moved) {const target = pointerTarget(event); if (target) reorder(drag.current, target.id, target.after);} if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); finishDrag();}} onPointerCancel={finishDrag}>⠿</button>
+      <div className="wb-nav-item wb-file-row" data-file-kind={isDirectory ? 'directory' : 'file'} data-file-extension={isDirectory ? undefined : node.name.split('.').at(-1).toLowerCase()} data-file-navigation-row={node.id} title={[node.location || [node.sourceId, node.path].filter(Boolean).join(' · '), readonly && '只读', node.file?.registered === true && '已登记'].filter(Boolean).join(' · ')} style={{paddingLeft: 7 + (level - 1) * 14, gap: 5, background: selectedId === node.id ? 'var(--wb-soft)' : undefined, boxShadow: focusedId === node.id ? 'inset 0 0 0 1px var(--wb-accent)' : undefined, borderTop: drop?.id === node.id && !drop.after ? '2px solid var(--wb-accent)' : '2px solid transparent', borderBottom: drop?.id === node.id && drop.after ? '2px solid var(--wb-accent)' : '2px solid transparent'}} draggable onClick={event => {event.stopPropagation(); focus(node.id); if (!dragging && (!event.detail || event.detail === 1)) open(node, false);}} onDoubleClick={event => {event.stopPropagation(); if (!isDirectory && !dragging) {focus(node.id); open(node, true);}}} onDragStart={event => {event.stopPropagation(); drag.current = node.id; setDragging(true); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData(DRAG_TYPE, node.id);}} onDragOver={event => {event.stopPropagation(); if (canDrop(drag.current, node.id)) {event.preventDefault(); event.dataTransfer.dropEffect = 'move'; dropAt(node.id, event.clientY, event.currentTarget);} else setDrop(null);}} onDrop={event => {event.preventDefault(); event.stopPropagation(); const target = dropAt(node.id, event.clientY, event.currentTarget); if (target) reorder(drag.current, target.id, target.after); finishDrag();}} onDragEnd={finishDrag}>
+        <span className="wb-file-disclosure" aria-hidden="true">{isDirectory && <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={12}/>}</span>
+        <Icon className="wb-file-icon" style={{color:'var(--wb-file-icon-color,#4889e6)',fill:'color-mix(in srgb,currentColor 12%,transparent)'}} name={isDirectory ? (isOpen ? 'folder-open' : 'folder') : 'file'} size={16}/>
+        <span className="wb-file-name">{node.name}</span>
+        {readonly && <Icon name="lock" className="wb-file-readonly" size={12}/>}
+
       </div>
       {isDirectory && isOpen && <div role="group">{render(node.children, level + 1)}</div>}
     </div>;

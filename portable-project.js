@@ -32,11 +32,20 @@ function binding(value){
   if(!identifier(value.systemId)||!Number.isSafeInteger(value.version)||value.version<1)fail('INVALID_PORTABLE_METADATA','Independent bindings require a pinned system version');
   return {mode:'independent',systemId:value.systemId,version:value.version};
 }
+function schemaArtifact(page) {
+  const source=page.artifact;
+  const artifact=pick(source,['kind','schemaVersion','compilerVersion','entry','sourceRoot','files','sourceHash','version','buildId']);
+  artifact.binding=business(pick(source.binding,['systemId','version','name','manifest','rootClass','tokens','resources']));
+  artifact.sourceMap=Object.fromEntries(Object.entries(source.sourceMap||{}).map(([id,address])=>[id,pick(address,['nodeId','part','bind','recordKey','source','keyField','fieldId','field','index'])]));
+  artifact.formFields=copy(source.formFields||{});
+  artifact.history={entries:[{entry:source.entry,sourceHash:source.sourceHash,htmlPath:page.htmlPath,contentHash:page.contentHash,binding:copy(artifact.binding)}],cursor:0};
+  return artifact;
+}
 function publicProject(project){
   const p=migrateWorkbench(project),designs=p.workbench.designs.filter(d=>!d.deletedAt&&d.private!==true&&d.visibility!=='private'),ids=new Set(designs.map(d=>d.id));
   const pages=p.artboards.filter(a=>!a.deletedAt&&a.private!==true&&a.visibility!=='private'&&(!a.designId||ids.has(a.designId)));
   for(const item of [...designs,...pages])if(!identifier(item.id))fail('INVALID_PORTABLE_METADATA','Invalid public design or page identity');
-  const out=pick(p,['name','description','platform']);if(p.canvas!==undefined)out.canvas=pick(p.canvas,['x','y','zoom']);out.artboards=pages.map(a=>({...pick(a,['id','name','platform','revision','htmlPath','contentHash','designId']),...(a.position!==undefined?{position:pick(a.position,['x','y'])}:{}),...(a.viewport!==undefined?{viewport:pick(a.viewport,['width','height'])}:{}),...business(pick(a,['entry','scene']))}));
+  const out=pick(p,['name','description','platform']);if(p.canvas!==undefined)out.canvas=pick(p.canvas,['x','y','zoom']);out.artboards=pages.map(a=>({...pick(a,['id','name','platform','revision','htmlPath','contentHash','designId']),...(a.position!==undefined?{position:pick(a.position,['x','y'])}:{}),...(a.viewport!==undefined?{viewport:pick(a.viewport,['width','height'])}:{}),...business(pick(a,['entry','scene'])),...(a.artifact?.kind==='schema'?{artifact:schemaArtifact(a)}:{})}));
   out.workbench={schemaVersion:1,...pick(p.workbench,['goal','requirementsPath','rulesPath']),designs:designs.map(d=>({...pick(d,['id','name','platform','folder']),pageIds:pages.filter(a=>a.designId===d.id||(d.pageIds||[]).includes(a.id)).map(a=>a.id),binding:binding(d.binding),...(d.scenes!==undefined?{scenes:business(d.scenes)}:{})})),files:[]};
   if(p.systemId){if(!identifier(p.systemId)||!Number.isSafeInteger(p.systemVersion)||p.systemVersion<1)fail('INVALID_PORTABLE_METADATA','Project binding requires a pinned system version');out.systemId=p.systemId;out.systemVersion=p.systemVersion;}else{out.systemId=null;out.systemVersion=null;}
   return out;
@@ -67,6 +76,14 @@ export async function buildPortableProject(owner,projectId,env={}){
   const project=publicProject(original);
   for(const d of project.workbench.designs)d.folder=logicalPath(d.folder);
   for(const p of project.artboards)p.htmlPath=logicalPath(p.htmlPath);
+  for (const page of project.artboards.filter(page=>page.artifact?.kind==='schema')) {
+    const artifact=page.artifact;
+    artifact.entry=logicalPath(artifact.entry);
+    artifact.sourceRoot=logicalPath(artifact.sourceRoot);
+    artifact.files=artifact.files.map(logicalPath);
+    for (const lock of [artifact.binding,...artifact.history.entries.map(entry=>entry.binding)]) for (const resource of Object.values(lock.resources||{})) resource.path=logicalPath(resource.path);
+    for (const entry of artifact.history.entries) {entry.entry=logicalPath(entry.entry);entry.htmlPath=logicalPath(entry.htmlPath);}
+  }
   for(const key of ['requirementsPath','rulesPath'])if(project.workbench[key])project.workbench[key]=logicalPath(project.workbench[key]);
   const root=await owner.store.target(`projects/${projectId}`,env.signal),files=[],included=new Set();let totalBytes=0;
   const add=(logical,bytes)=>{portablePath(logical,{system:true});if(logical===PORTABLE_MANIFEST_PATH||included.has(logical))fail('INVALID_PORTABLE_PATH','Duplicate or reserved portable path');if(bytes.length>PORTABLE_LIMITS.fileBytes||totalBytes+bytes.length>PORTABLE_LIMITS.totalBytes||files.length>=PORTABLE_LIMITS.files-1)fail('PORTABLE_LIMIT','Project exceeds 4000 files, 32 MiB per file, or 128 MiB total');included.add(logical);totalBytes+=bytes.length;files.push({path:logical,bytes});};
@@ -87,11 +104,20 @@ export async function buildPortableProject(owner,projectId,env={}){
   }
   const systems=[],needed=new Map(),reverse=new Map();
   for(const [portable,local]of Object.entries(original.workbench.sync?.systemMap||{})){const match=/^([a-z]-[a-zA-Z0-9-]{1,100}):v([1-9][0-9]*)$/.exec(portable);if(!match||!identifier(local?.systemId)||!Number.isSafeInteger(local.version)||local.version<1||!Number.isSafeInteger(Number(match[2])))fail('INVALID_PORTABLE_METADATA','Invalid local-to-portable system mapping');const key=local.systemId+':'+local.version;if(reverse.has(key))fail('INVALID_PORTABLE_METADATA','Ambiguous local-to-portable system mapping');reverse.set(key,{systemId:match[1],version:Number(match[2])});}
-  const pinned=(systemId,version)=>{const stable=reverse.get(systemId+':'+version)||{systemId,version};needed.set(stable.systemId+':'+stable.version,{...stable,localSystemId:systemId,localVersion:version});return stable;};
-  if(project.systemId){const stable=pinned(project.systemId,project.systemVersion);project.systemId=stable.systemId;project.systemVersion=stable.version;}
-  for(const d of project.workbench.designs)if(d.binding.mode==='independent')d.binding={mode:'independent',...pinned(d.binding.systemId,d.binding.version)};
-  for(const {systemId,version,localSystemId,localVersion} of [...needed.values()].sort((a,b)=>compare(a.systemId+':'+a.version,b.systemId+':'+b.version))){
-    const exported=await owner.workbench.execute({action:'system.export',systemId:localSystemId,version:localVersion},{...env,user:false});const pkg=systemPackage(exported.system,localVersion);pkg.id=systemId;pkg.revision=version;pkg.versions[0].version=version;const logical=`portable-systems/${systemId}-v${version}.json`;add(logical,Buffer.from(portableJSON(pkg)));systems.push({systemId,version,path:logical});
+  const currentBindings=new Map();
+  async function currentBinding(id) {
+    if (currentBindings.has(id)) return currentBindings.get(id);
+    const {system}=await owner.workbench.execute({action:'system.export',systemId:id},{...env,user:false});
+    const revision=system.versions.at(-1)?.version;
+    const stable=reverse.get(id+':'+revision)||{systemId:id,version:revision};
+    needed.set(stable.systemId+':'+stable.version,{...stable,pkg:systemPackage(system,revision)});
+    currentBindings.set(id,stable);
+    return stable;
+  }
+  if(project.systemId){const stable=await currentBinding(project.systemId);project.systemId=stable.systemId;project.systemVersion=stable.version;}
+  for(const d of project.workbench.designs)if(d.binding.mode==='independent')d.binding={mode:'independent',...await currentBinding(d.binding.systemId)};
+  for(const {systemId,version,pkg} of [...needed.values()].sort((a,b)=>compare(a.systemId+':'+a.version,b.systemId+':'+b.version))){
+    pkg.id=systemId;pkg.revision=version;pkg.versions[0].version=version;const logical=`portable-systems/${systemId}-v${version}.json`;add(logical,Buffer.from(portableJSON(pkg)));systems.push({systemId,version,path:logical});
   }
   project.workbench.files.sort((a,b)=>compare(a.path,b.path));files.sort((a,b)=>compare(a.path,b.path));
   const manifest={schemaVersion:1,format:'dsh-portable-project',sourceProjectId:projectId,sourceRevision:original.revision,project,systems,files:files.map(f=>({path:f.path,sha256:sha(f.bytes),byteLength:f.bytes.length})),totalBytes};manifest.manifestHash=sha(portableJSON(manifest));

@@ -106,11 +106,11 @@ export function knowledgeImportName(files = [], repositoryUrl = '') {
   return files.length === 1 ? files[0].name : '本地资料';
 }
 export function knowledgeTextPreview(value) { return typeof value?.content === 'string' ? value.content : typeof value?.text === 'string' ? value.text : null; }
-const TEXT_EXTENSIONS = /\.(?:txt|md|mdx|rst|csv|tsv|json|jsonl|ya?ml|toml|ini|conf|config|log|xml|html?|css|scss|less|js|jsx|mjs|cjs|ts|tsx|vue|svelte|py|rb|php|go|rs|c|cc|cpp|h|hpp|java|kt|swift|sh|bash|zsh|sql|graphql|gql|proto|dockerfile|gitignore)$/i;
+const TEXT_EXTENSIONS = /\.(?:svg|txt|md|mdx|rst|csv|tsv|json|jsonl|ya?ml|toml|ini|conf|config|log|xml|html?|css|scss|less|js|jsx|mjs|cjs|ts|tsx|vue|svelte|py|rb|php|go|rs|c|cc|cpp|h|hpp|java|kt|swift|sh|bash|zsh|sql|graphql|gql|proto|dockerfile|gitignore)$/i;
 export function isKnowledgeText(document) { return /^text\//i.test(document?.mimeType || '') || /^application\/(?:json|[a-z0-9.+-]+\+json|javascript|ecmascript|xml|[a-z0-9.+-]+\+xml|yaml|x-yaml|toml)$/i.test(document?.mimeType || '') || TEXT_EXTENSIONS.test(document?.name || '') || /^(?:Dockerfile|Makefile|LICENSE|README|\.gitignore)$/i.test(document?.name || ''); }
-export async function loadKnowledgeTextPreview(value, document, fetcher = globalThis.fetch, maxBytes = 512 * 1024) {
+export async function loadKnowledgeTextPreview(value, document, fetcher = globalThis.fetch, maxBytes = 512 * 1024, signal) {
   if (!isKnowledgeText(document) || !value.originalUrl) return value;
-  const response = await fetcher(value.originalUrl, { credentials: 'same-origin' });
+  const response = await fetcher(value.originalUrl, { credentials: 'same-origin', ...(signal ? {signal} : {}) });
   if (!response.ok) throw new Error(`原件读取失败：HTTP ${response.status}`);
   if (!response.body?.getReader) throw new Error('当前环境不支持文本预览，请下载原件查看。');
   const reader = response.body.getReader(), chunks = []; let length = 0, truncated = false;
@@ -124,3 +124,28 @@ export async function loadKnowledgeTextPreview(value, document, fetcher = global
   return { ...value, content: new TextDecoder().decode(bytes), truncated };
 }
 export function knowledgeFileSize(bytes = 0) { return bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`; }
+
+export function knowledgeTreeEntries(nodes) {
+  return nodes.flatMap(node => node.type === 'folder'
+    ? [{path: node.path, name: node.name, meta: {kind: 'directory'}}, ...knowledgeTreeEntries(node.children)]
+    : [{path: `${node.path}#${node.document.id}`, name: node.name, meta: {kind: 'file', documentId: node.document.id}}]);
+}
+
+export function knowledgePreviewTab(value, document) {
+  const text = isKnowledgeText(document);
+  const media = /^image\/|^audio\/|^video\/|^application\/pdf$/i.test(document.mimeType || '') || /\.(?:pdf|png|jpe?g|gif|webp|avif|bmp|ico|mp3|wav|ogg|flac|aac|m4a|mp4|webm|mov|m4v)$/i.test(document.name);
+  return {id: document.id, resourceId: document.id, name: document.name, path: document.relativePath || document.name,
+    type: text || media ? 'file' : 'binary', binary: !text && !media,
+    mimeType: text && document.mimeType === 'application/octet-stream' ? 'text/plain' : document.mimeType,
+    readonly: true, content: knowledgeTextPreview(value) || '', previewUrl: value.originalUrl, downloadUrl: value.downloadUrl,
+    byteLength: document.bytes, truncated: Boolean(value.truncated)};
+}
+
+export function knowledgeLinkedDocument(document, href, documents) {
+  const resolved = new URL(href, `https://knowledge.local/${document.relativePath || document.name}`);
+  if (resolved.origin !== 'https://knowledge.local') throw new Error('资源链接不在当前知识库内。');
+  const path = decodeURIComponent(resolved.pathname.slice(1));
+  const matches = documents.filter(item => (item.relativePath || item.name) === path);
+  if (matches.length !== 1) throw new Error('知识库资源不存在或路径不唯一。');
+  return matches[0];
+}

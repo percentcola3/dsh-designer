@@ -78,13 +78,13 @@ test('actual scoped task.get and help return lossless JSON at the registered too
 test('actual create then replace commits return durable artboard identities and revisions after persistence',async t=>{
   const f=await prepared(t),tool=f.agent.scoped.get('designer_commit_html');
   let project=(await f.service.store.projectGet(f.project.id)).project;
-  const created=await tool.execute({name:'Native page',html:html('Created'),expectedRevision:project.revision},f.exec);assertJson(created);assert.ok(created.artboard?.id);
+  const created=await tool.execute({newPage:true,name:'Native page',html:html('Created'),expectedRevision:project.revision},f.exec);assertJson(created);assert.ok(created.artboard?.id);
   project=(await f.service.store.projectGet(f.project.id)).project;assert.equal(created.projectRevision,project.revision);
-  const savedCreated=project.artboards.find(p=>p.id===created.artboard.id);assert.ok(savedCreated.lastTaskCommit);assert.equal((await f.service.store.artboardGet(project.id,savedCreated.id)).html,normalizeDocument(html('Created')).html);
+  const savedCreated=project.artboards.find(p=>p.id===created.artboard.id);assert.ok(savedCreated.lastTaskCommit);assert.ok(!f.service.aiWorkbench.taskFor(f.agent).pageIds.includes(created.artboard.id));assert.equal((await f.service.store.artboardGet(project.id,savedCreated.id)).html,normalizeDocument(html('Created')).html);
   // Replace the page admitted when this task was frozen; creating a new page
   // does not expand that task's existing-page write grant.
   const initial=project.artboards.find(p=>p.id===f.service.aiWorkbench.taskFor(f.agent).pageIds[0]);
-  const replaced=await tool.execute({artboardId:initial.id,html:html('Replaced'),expectedRevision:project.revision,expectedArtboardRevision:initial.revision},f.exec);
+  const replaced=await tool.execute({html:html('Replaced'),expectedRevision:project.revision,expectedArtboardRevision:initial.revision},f.exec);
   const after=(await f.service.store.projectGet(project.id)).project;
   assert.equal(normalizeDocument((await f.service.store.artboardGet(project.id,initial.id)).html).nodes.title.text,'Replaced');
   assertJson(replaced);assert.equal(replaced.artboard.id,initial.id);assert.equal(replaced.artboard.revision,after.artboards.find(p=>p.id===initial.id).revision);assert.equal(replaced.projectRevision,after.revision);assert.ok(replaced.projectRevision>created.projectRevision);
@@ -104,4 +104,121 @@ test('registered global tools and scoped post-processing preserve modelSafe reda
   const scoped=await f.agent.scoped.get('designer_workbench').execute({action:'task.get'},f.exec);assertJson(scoped);assert.deepEqual(scoped.nested,[{}]);assert.ok(!JSON.stringify(scoped).includes('SECRET'));
   f.service.executeOperation=async()=>({invalid:NaN});
   await assert.rejects(global.execute({action:'probe.json'},{...f.exec,agent:{id:'ordinary'}}),{code:'INVALID_MODEL_OUTPUT'});
+});
+
+test('native scene validation is read-only through the full owner dispatch and returns coverage',async t=>{
+  const f=await prepared(t),tool=f.agent.scoped.get('designer_workbench');
+  const project=(await f.service.store.projectGet(f.project.id)).project;
+  const page=project.artboards.find(p=>p.id===f.service.aiWorkbench.taskFor(f.agent).pageIds[0]);
+  const result=await tool.execute({action:'edit.validate',options:{pageId:page.id,requiredSceneIds:['detail']}},f.exec);
+  assertJson(result);assert.equal(result.valid,false);assert.equal(result.page.id,page.id);assert.deepEqual(result.sceneCoverage.missingSceneIds,['detail']);
+  const after=(await f.service.store.projectGet(f.project.id)).project;
+  assert.equal(after.revision,project.revision);assert.deepEqual(after.history,project.history);assert.deepEqual(after.artboards,page?project.artboards:[]);
+});
+
+test('one native HTML commit saves state operations atomically and validates through the normal route',async t=>{
+  const f=await prepared(t),tool=f.agent.scoped.get('designer_commit_html');
+  const project=(await f.service.store.projectGet(f.project.id)).project,page=project.artboards[0];
+  const operations=[{type:'scene.set',scene:{id:'detail',name:'详情',nodes:{panel:{hidden:false}}}},{type:'interaction.set',interaction:{id:'open-detail',type:'scene',sourceId:'open',sceneId:'detail'}}];
+  const source='<!doctype html><html><body><button data-dsh-node="open">详情</button><section data-dsh-node="panel" hidden>可编辑详情</section></body></html>';
+  const saved=await tool.execute({artboardId:page.id,html:source,operations,expectedRevision:project.revision,expectedArtboardRevision:page.revision},f.exec);
+  assertJson(saved);assert.equal(saved.sceneCount,1);assert.equal(saved.interactionCount,1);const persisted=normalizeDocument((await f.service.store.artboardGet(project.id,page.id)).html);
+  assert.equal(persisted.scenes.items[0].id,'detail');assert.equal(persisted.interactions[0].sceneId,'detail');assert.ok(persisted.nodes.panel);
+  const before=(await f.service.store.projectGet(project.id)).project;
+  const validation=await f.agent.scoped.get('designer_workbench').execute({action:'edit.validate',options:{pageId:page.id,requiredSceneIds:['detail']}},f.exec);
+  assert.equal(validation.valid,true);assert.deepEqual(validation.sceneCoverage.missingSceneIds,[]);assert.equal((await f.service.store.projectGet(project.id)).project.revision,before.revision);
+  await assert.rejects(tool.execute({artboardId:page.id,html:source,operations:[{type:'scene.set',scene:{id:'missing',nodes:{absent:{hidden:false}}}}],expectedRevision:before.revision},f.exec),error=>{const receipt=JSON.parse(error.message);assert.equal(receipt.saved,false);assert.equal(receipt.stage,'document-validation');assert.ok(receipt.error.code);return true;});
+  assert.equal((await f.service.store.projectGet(project.id)).project.revision,before.revision);
+  assert.deepEqual(normalizeDocument((await f.service.store.artboardGet(project.id,page.id)).html).scenes,persisted.scenes);
+});
+
+test('native staged generation copies repeated content and registers scenes without re-emitting HTML',async t=>{
+  const f=await prepared(t),project=(await f.service.store.projectGet(f.project.id)).project,page=project.artboards[0];
+  const commit=f.agent.scoped.get('designer_commit_html'),workbench=f.agent.scoped.get('designer_workbench');
+  const saved=await commit.execute({artboardId:page.id,expectedRevision:project.revision,html:'<!doctype html><html><body><main data-dsh-node="list"><article data-dsh-node="row"><h2 data-dsh-node="name">张明</h2><button data-dsh-node="open">详情</button><p data-dsh-node="detail" hidden>示例详情</p></article></main></body></html>'},f.exec);
+  const copied=await workbench.execute({action:'edit.apply',options:{pageId:page.id,expectedRevision:saved.projectRevision,operations:[
+    {type:'duplicate',nodeIds:['row'],copies:[{prefix:'second',nodes:{name:{text:'李晓'}}}]},
+    {type:'scene.set',scene:{id:'second-details',name:'李晓详情',nodes:{'second:detail':{hidden:false}}}},
+    {type:'interaction.set',interaction:{id:'open-second',type:'scene',sourceId:'second:open',sceneId:'second-details'}},
+  ]}},f.exec);
+  assertJson(copied);assert.equal(copied.changes.copies[0].nodeIdMap.name,'second:name');
+  assert.equal(copied.sceneCount,1);assert.equal(copied.interactionCount,1);
+  const doc=normalizeDocument((await f.service.store.artboardGet(project.id,page.id)).html);
+  assert.equal(doc.nodes['second:name'].text,'李晓');assert.equal(doc.nodes.name.text,'张明');
+  const validation=await workbench.execute({action:'edit.validate',options:{pageId:page.id,requiredSceneIds:['second-details']}},f.exec);
+  assertJson(validation);assert.equal(validation.valid,true);
+  const before=(await f.service.store.projectGet(project.id)).project.revision;
+  await assert.rejects(workbench.execute({action:'edit.apply',options:{pageId:page.id,expectedRevision:saved.projectRevision,operations:[{type:'duplicate',nodeIds:['row'],copies:[{prefix:'stale'}]}]}},f.exec));
+  assert.equal((await f.service.store.projectGet(project.id)).project.revision,before);
+});
+
+test('native commit retries resolve pending scenes atomically from the failed HTML',async t=>{
+  const f=await prepared(t),tool=f.agent.scoped.get('designer_commit_html'),project=(await f.service.store.projectGet(f.project.id)).project,page=project.artboards[0];
+  const source='<!doctype html><html><body><p data-dsh-node="label">Ready</p><script id="dsh-document-model" type="application/json">'+JSON.stringify({schemaVersion:1,scenes:{active:'start',items:[]}})+'</script></body></html>';
+  const args={artboardId:page.id,html:source,operations:[],expectedRevision:project.revision,expectedArtboardRevision:page.revision};
+  let failed;
+  await assert.rejects(tool.execute(args,f.exec),error=>{failed=JSON.parse(error.message);return failed.saved===false;});
+  assert.equal((await f.service.store.projectGet(project.id)).project.revision,project.revision);
+  f.agent.session.append('tool/call',{callId:'pending-scenes',name:'designer_commit_html',arguments:JSON.stringify(args)});
+  f.agent.session.append('tool/result',{message:{toolCallId:'pending-scenes',isError:true,content:[{type:'text',text:'Error: '+JSON.stringify(failed)}]}});
+  const saved=await tool.execute({retryLast:true,expectedRevision:project.revision,operations:[{type:'scene.set',scene:{id:'start',name:'Start',nodes:{}}}]},f.exec);
+  assert.equal(saved.saved,true);assert.equal(saved.sceneCount,1);
+  const document=normalizeDocument((await f.service.store.artboardGet(project.id,page.id)).html);
+  assert.equal(document.scenes.active,'start');assert.equal(document.nodes.label.text,'Ready');
+});
+
+test('precise failed-commit diagnostics allow a small native-history retry without regenerating HTML',async t=>{
+  const f=await prepared(t),tool=f.agent.scoped.get('designer_commit_html'),project=(await f.service.store.projectGet(f.project.id)).project,page=project.artboards[0];
+  const source='<!doctype html><html><body><form data-dsh-node="form"><input data-dsh-node="date" type="date" min="2026-11-15" max="2026-12-14"></form></body></html>';
+  const operations=[{type:'scene.set',scene:{id:'filled',nodes:{date:{attributes:{value:'2026-11-16'}}}}},{type:'interaction.set',interaction:{id:'submit',type:'form',sourceId:'form',rules:[{nodeId:'date',required:true,pattern:'(2026)'}]}}];
+  const args={artboardId:page.id,html:source,operations,expectedRevision:project.revision,expectedArtboardRevision:page.revision};
+  let failed;await assert.rejects(tool.execute(args,f.exec),error=>{failed=JSON.parse(error.message);return true;});assertJson(failed);assert.equal(failed.saved,false);assert.equal(failed.recovery.retryLast,true);assert.ok(failed.error.details.diagnostics.some(d=>d.message.includes('without grouping parentheses')));
+  assert.equal((await f.service.store.projectGet(project.id)).project.revision,project.revision);
+  f.agent.session.append('tool/call',{callId:'failed-commit',name:'designer_commit_html',arguments:JSON.stringify(args)});
+  f.agent.session.append('tool/result',{message:{toolCallId:'failed-commit',isError:true,content:[{type:'text',text:'Error: '+JSON.stringify(failed)}]}});
+  await assert.rejects(tool.execute({retryLast:true,artboardId:'a-other',expectedRevision:project.revision},f.exec),{code:'COMMIT_TARGET_CHANGED'});
+  const retry={retryLast:true,expectedRevision:project.revision,operations:[{type:'interaction.set',interaction:{id:'submit',type:'form',sourceId:'form',rules:[{nodeId:'date',required:true}]}}]};
+  const saved=await tool.execute(retry,f.exec);assertJson(saved);assert.equal(saved.saved,true);assert.equal(saved.sceneCount,1);assert.equal(saved.interactionCount,1);
+  const content=normalizeDocument((await f.service.store.artboardGet(project.id,page.id)).html);assert.equal(content.interactions[0].rules[0].pattern,undefined);assert.equal(content.scenes.items[0].id,'filled');
+  f.agent.session.append('tool/call',{callId:'recovered-commit',name:'designer_commit_html',arguments:JSON.stringify(retry)});
+  f.agent.session.append('tool/result',{message:{toolCallId:'recovered-commit',isError:false,content:[{type:'text',text:JSON.stringify(saved)}]}});
+  await assert.rejects(tool.execute({retryLast:true,expectedRevision:saved.projectRevision},f.exec),{code:'FAILED_COMMIT_NOT_FOUND'});
+});
+
+for(const packaged of [true,false])test(`native pattern copy with ${packaged?'package':'compatible legacy'} catalog preserves scopes and editable scenes`,async t=>{
+  const {desktopSystemFiles}=await import('./desktop-theme.js');
+  const f=await prepared(t);
+  f.agent.status='idle';
+  f.agent.session.append('turn/end',{turn:1,reason:{kind:'completed'}});
+  const system=await f.service.execute({action:'system.import',system:{name:'Pattern fixture',platforms:['web'],versions:[{version:1,resources:desktopSystemFiles({primary:'#663399'}).filter(file=>packaged||!['skeletons.json','patterns/desktop-records.html'].includes(file.logicalPath))}]}},{user:true});
+  let project=(await f.service.store.projectGet(f.project.id)).project;
+  await f.service.execute({action:'binding.set',projectId:project.id,systemId:system.id,version:1,expectedRevision:project.revision},{user:true});
+  await f.service.execute({action:'ai.run',projectId:project.id,prompt:'Copy and tailor the bound pattern',target:{scope:'project'}},{user:true});
+  project=(await f.service.store.projectGet(project.id)).project;
+  const page=project.artboards[0],tool=f.agent.scoped.get('designer_workbench'),commit=f.agent.scoped.get('designer_commit_html');
+  const summary=await tool.execute({action:"task.get"},f.exec);
+  const resourceId=summary.effectiveBinding.resourceId;
+  const guide=await tool.execute({action:'generation.guide',options:{topic:'system'}},f.exec);
+  assertJson(guide);assert.equal(guide.topic,'system');
+  const direct=await f.service.execute({action:'generation.guide',projectId:project.id,topic:'system'},{agent:f.agent});
+  assert.deepEqual(direct.steps,guide.steps);
+  const catalog=await tool.execute({action:'system.patterns',options:{resourceId}},f.exec);
+  assertJson(catalog);assert.equal(JSON.parse(catalog.text).patterns[0].id,'desktop-records');
+  assert.equal(JSON.parse(catalog.text).source,packaged?'package':'host');
+  await assert.rejects(commit.execute({artboardId:page.id,expectedRevision:project.revision-1,pattern:{resourceId,patternId:'desktop-records'}},f.exec),{code:'VERSION_CONFLICT'});
+  await assert.rejects(commit.execute({artboardId:page.id,expectedRevision:project.revision,pattern:{resourceId:'binding:foreign',patternId:'desktop-records'}},f.exec),{code:'REFERENCE_NOT_FOUND'});
+  await assert.rejects(commit.execute({artboardId:page.id,expectedRevision:project.revision,pattern:{resourceId,patternId:'desktop-records'},operations:[{type:'text',nodeIds:['absent-node'],value:'invalid'}]},f.exec));
+  assert.equal((await f.service.store.projectGet(project.id)).project.revision,project.revision);
+  const copied=await commit.execute({artboardId:page.id,expectedRevision:project.revision,pattern:{resourceId,patternId:'desktop-records'},operations:[{type:'text',nodeIds:['page-title'],value:'社区服务预约'}]},f.exec);
+  assertJson(copied);assert.equal(copied.saved,true);assert.equal(copied.sceneCount,9);assert.equal(copied.interactionCount,24);
+  assert.equal(copied.pattern.editableNodes.title,'page-title');
+  assert.equal(copied.pattern.source,packaged?'package':'host');
+  const saved=normalizeDocument((await f.service.store.artboardGet(project.id,page.id)).html);
+  assert.equal(saved.nodes['page-title'].text,'社区服务预约');
+  assert.match(saved.resources.find(row=>row.attribute==='href').url,/assets\/system-/);
+  const valid=await tool.execute({action:'edit.validate',options:{pageId:page.id,requiredSceneIds:copied.pattern.sceneIds}},f.exec);
+  assert.equal(valid.valid,true);
+  const current=(await f.service.store.projectGet(project.id)).project;
+  await assert.rejects(commit.execute({artboardId:page.id,expectedRevision:current.revision,pattern:{resourceId,patternId:'absent'}},f.exec),{code:'REFERENCE_NOT_FOUND'});
+  assert.equal((await f.service.store.projectGet(project.id)).project.revision,current.revision);
 });

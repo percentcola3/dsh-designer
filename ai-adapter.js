@@ -257,7 +257,9 @@ export async function admitWorkbenchAI(owner,input,signal,policy,{user=false}={}
     const prefix='Design task: '+normalized.prompt+'\n\n',body=prepared.prompt.startsWith(prefix)?prepared.prompt.slice(prefix.length):prepared.prompt;
     try{
       ai.setTask(agent,prepared.task,{requestId});
-      setNativeTaskContext(owner,agent,body,record);
+      const contextBody = anchored ? body + '\n\nProject revision at admission: ' + projectRevision +
+        '. Use this expectedRevision for the first write. After a write use its returned revision. On a conflict refresh the target and preserve concurrent changes.' : body;
+      setNativeTaskContext(owner,agent,contextBody,record);
       await owner.ctx.sessionController.prompt({sessionId,requestId,mode:'queue',content:[{type:'text',text:input.prompt},...attachments]},signal||new AbortController().signal);
     }catch(error){
       let admitted=false;try{admitted=await requestWasAdmitted(owner,agent,requestId)}catch{}

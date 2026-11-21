@@ -64,15 +64,9 @@ test('native design bootstrap is reused without adding a duplicate artboard',asy
  const api=async(action,args)=>{calls.push(action);if(action==='project.get')return {project:{id:'p',revision:1,workbench:{designs:[]}}};if(action==='design.create')return {design,page,project:{id:'p',revision:2,workbench:{designs:[design]},artboards:[page]}};throw Error('Unexpected duplicate action: '+action);};
  const result=await createCanvasDesign(api,{projectId:'p',name:'Web'});assert.equal(result.page.id,page.id);assert.deepEqual(calls,['project.get','design.create']);
 });
-for(const artifactKind of ['react','vue'])test(`${artifactKind} canvas creation passes the selected source kind separately from platform`,async()=>{
-  const f=fixture(),checkpoint={},args={projectId:'p',name:'源码设计',artifactKind,platform:'mobile'};
-  await assert.rejects(createCanvasDesign(f.api,args,checkpoint),/temporary failure/);
-  const result=await createCanvasDesign(f.api,args,checkpoint);
-  const create=f.calls.find(call=>call.action==='design.create').args;
-  assert.equal(create.artifactKind,artifactKind);assert.equal(create.platform,'mobile');
-  assert.deepEqual(result.page.viewport,{width:390,height:844});
-  assert.equal(f.calls.filter(call=>call.action==='design.create').length,1);
-  assert.ok(f.calls.filter(call=>call.action==='page.create').every(call=>!Object.hasOwn(call.args,'artifactKind')),'new page inherits its owning design format');
+for(const artifactKind of ['react','vue'])test('canvas rejects new '+artifactKind+' projects before writing',async()=>{
+  const f=fixture();await assert.rejects(createCanvasDesign(f.api,{projectId:'p',name:'设计',artifactKind}),{code:'INVALID_ARTIFACT_KIND'});
+  assert.deepEqual(f.calls,[]);
 });
 test('HTML canvas creation retains the original request shape',async()=>{
   const f=fixture();await assert.rejects(createCanvasDesign(f.api,{projectId:'p',name:'HTML',artifactKind:'html'}));

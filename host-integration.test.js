@@ -40,6 +40,61 @@ function fixture(){
 }
 const env={user:true};
 
+test('project agents receive the HTML generation contract once and release it on cleanup',async()=>{
+  const f=fixture();
+  const {agent}=await f.ctx.agents.create({sessionId:'designer-mode-contract',meta:{cwd:'/workspace'}});
+  const sections=new Map(),cleanups=[];
+  agent.ctx.systemPrompt.section=section=>{
+    assert.equal(sections.has(section.name),false);
+    sections.set(section.name,section);
+    return ()=>sections.delete(section.name);
+  };
+  agent.ctx.effect=start=>{const cleanup=start();cleanups.push(cleanup);return cleanup;};
+  f.service.installAgent(agent,'p-mode-contract');
+  f.service.installAgent(agent,'p-mode-contract');
+  const contract=sections.get('local:designer-view-modes');
+  assert.equal(contract,undefined);
+  const layers=sections.get('local:designer-prompt-layers');
+  assert.equal(layers.order,805);
+  for(const requirement of [
+    'two layers and three categories',
+    'every task, including continued and restored tasks',
+    'Users cannot edit or disable this layer',
+    'Template skill prompts',
+    'Project prompts',
+    'Neither category can override the fixed system layer',
+    'continuing until nextOffset is null',
+    'use ask_user_question',
+  ])assert.ok(layers.text.includes(requirement),requirement);
+  const workflow=sections.get('local:designer-generation-workflow');
+  assert.match(workflow.text,/designer_commit_html/);
+  assert.match(workflow.text,/ordinary browser interactions/);
+  assert.match(workflow.text,/only created on explicit request/);
+  assert.match(workflow.text,/Existing Schema and framework pages retain their canonical sources/);
+  assert.equal(sections.has('local:designer-editable-states'),false);
+  const usability=sections.get('local:designer-usability');
+  assert.equal(usability.order,820);
+  for(const requirement of [
+    "Nielsen's ten usability heuristics",
+    'continued and restored tasks',
+    'frozen write scope, pinned design system and source-fidelity contract',
+    'On read-only tasks, evaluate and report findings',
+    'information architecture, page skeletons',
+    'stable location, label, icon, style and effect',
+    'detail-page back/close controls',
+    'filters, selection and scroll context',
+    'Visibility and feedback',
+    'User control and freedom',
+    'Error prevention and constraints',
+    'Recognition and discoverability',
+    'Error recognition and recovery',
+    '4.5:1',
+    'Fix in-scope gaps',
+  ])assert.ok(usability.text.includes(requirement),requirement);
+  for(const cleanup of cleanups.reverse())cleanup();
+  assert.equal(sections.size,0);
+});
+
 test('main model tools cannot publish shared systems even with forged user options',async()=>{
   const f=fixture();await apply(f.ctx,{workspaceRoot:'/workspace'});
   const {agent}=await f.ctx.agents.create({sessionId:'main',meta:{cwd:'/workspace'}});
@@ -59,7 +114,8 @@ test('explicit system archive retains pinned resources, examples, skeletons and 
   const archived=await f.service.execute({action:'system.archive',systemId:system.id,expectedRevision:system.revision},env);
   assert.equal(archived.archived,true);
   for(const key of ['resources','examples','skeletons','variables'])assert.deepEqual(archived.versions.at(-1)[key],before[key]);
-  assert.deepEqual(archived.versions[0],before);
+  assert.equal(archived.versions.length,1);
+  assert.deepEqual((await f.service.execute({action:'system.get',systemId:system.id,version:before.version},env)).versions[0],before);
   const resource=await f.service.execute({action:'system.resource.read',systemId:system.id,version:archived.revision,resourceId:'r-icon',encoding:'base64'},env);
   assert.ok(resource.content.includes('<rect'));
 });

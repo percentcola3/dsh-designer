@@ -20,6 +20,9 @@ const count = value => Number.isSafeInteger(value) && value >= 0 ? value : undef
 const identifier = (value, prefix = 'p') => typeof value === 'string' && new RegExp(`^${prefix}-[A-Za-z0-9-]{1,80}$`).test(value);
 const evidence = values => Object.entries(values).filter(([, value]) => value !== undefined).map(([label, value]) => ({label, value}));
 const version = value => typeof value === 'string' && /^v?\d{1,3}\.\d{1,3}\.\d{1,5}(?:-[a-zA-Z0-9.-]{1,30})?$/.test(value) ? value : undefined;
+const systemResource = (system, name) => (list(system.resources) || []).slice(0, MAX_ITEMS).some(resource => (resource?.logicalPath || resource?.path) === name);
+const systemTokens = system => plain(system.tokens) && Object.keys(system.tokens).length > 0 || systemResource(system, 'tokens.json');
+const systemRules = system => nonempty(system.guidelines) === true || systemResource(system, 'rule.md');
 function validate(input) {
   if (!plain(input)) fail('INVALID_INPUT', '诊断输入必须是普通操作对象');
   let options = {};
@@ -193,8 +196,8 @@ export class DiagnosticService {
           const snapshot = list(s.versions)?.at(-1);
           if (!snapshot) { unavailable++; continue; }
           inspected++;
-          tokens += plain(snapshot.tokens) && Object.keys(snapshot.tokens).length > 0 ? 1 : 0;
-          guidelines += nonempty(snapshot.guidelines) === true ? 1 : 0;
+          tokens += systemTokens(snapshot) ? 1 : 0;
+          guidelines += systemRules(snapshot) ? 1 : 0;
           resources += Math.min(list(snapshot.resources)?.length || 0, MAX_ITEMS);
           examples += Math.min(list(snapshot.examples)?.length || 0, MAX_ITEMS);
           if ((snapshot.resources?.length || 0) > MAX_ITEMS || (snapshot.examples?.length || 0) > MAX_ITEMS) report.limits.truncated = true;
@@ -247,7 +250,7 @@ export class DiagnosticService {
     const infoCategory = categories.find(category => category !== 'environment');
     if (infoCategory && scoped) {
       const current = count(p.revision), submitted = count(task.projectVersion);
-      add('generation.taskVersion', infoCategory, '冻结任务与当前项目版本', current === undefined || submitted === undefined ? 'unknown' : current === submitted ? 'pass' : 'warning', {currentRevision: current, submittedRevision: submitted, matching: current !== undefined && submitted !== undefined ? current === submitted : undefined}, '使用冻结绑定与已准入引用。如变更影响目标，请核对当前版本并重新提交，不要扩大当前任务范围。', 'feedback', current !== undefined && submitted !== undefined && current !== submitted ? '项目在任务提交后已变化；本报告不会刷新冻结任务。' : undefined, [suggest('task.get', {}, '下一轮设计迭代前先核对已准入任务。')]);
+      add('generation.taskVersion', infoCategory, '冻结任务与当前项目版本', current === undefined || submitted === undefined ? 'unknown' : current === submitted ? 'pass' : 'warning', {currentRevision: current, submittedRevision: submitted, matching: current !== undefined && submitted !== undefined ? current === submitted : undefined}, '使用最近保存回执中的当前版本继续任务。正常保存也会改变项目版本，出现实际版本冲突或目标变化时再核对。保留冻结绑定与已准入范围。', 'feedback', current !== undefined && submitted !== undefined && current !== submitted ? '当前版本与准入快照有差异，其中可能包含本任务的正常保存。实际写入继续使用版本校验。' : undefined, [suggest('task.get', {}, '需要当前版本时读取现有任务。')]);
     }
     if (categories.includes('generation')) {
       present('generation.goal', 'generation', '项目目标', nonempty(workbench.goal || p.description), '下次提交前明确用户群体、首要目标和验收标准。');
@@ -279,8 +282,8 @@ export class DiagnosticService {
       const known = bindings.length && bindings.every(binding => binding && own(binding, 'systemId'));
       add('assets.specification', 'assets', '固定规范绑定', !known ? 'unknown' : bound.length < bindings.length ? 'warning' : 'pass', {inspectedBindings: bindings.length, pinnedBindings: bound.length, invalidBindings: bindings.filter(binding => binding?.invalid).length}, '提交前选择所需规范版本；当前任务只使用自身冻结的各 Design 绑定。', 'generation');
       const systems = bound.flatMap(binding => binding.system ? [binding.system] : Object.values(binding.systems || {})).slice(0, MAX_RECORDS);
-      present('assets.tokens', 'assets', '固定设计令牌元数据', !systems.length ? undefined : systems.every(system => plain(system.tokens) && Object.keys(system.tokens).length > 0), '由所有者通过显式库操作整理可复用颜色、字体、间距和状态令牌。', 'components');
-      present('assets.guidelines', 'assets', '固定设计体系规则', !systems.length ? undefined : systems.every(system => nonempty(system.guidelines) === true), '固定有示例的具体样式与交互规则，使用有真实来源的 CSS/主题/图标/字体。', 'components');
+      present('assets.tokens', 'assets', '固定设计令牌元数据', !systems.length ? undefined : systems.every(systemTokens), '通过 context.read 读取绑定版本的 tokens.json 或已有令牌。缺少令牌时由所有者整理规范。', 'components');
+      present('assets.guidelines', 'assets', '固定设计体系规则', !systems.length ? undefined : systems.every(systemRules), '通过 context.read 读取绑定版本的 rule.md 或已有规范文本，按固定规则使用组件与资源。', 'components');
     }
     if (categories.includes('knowledge')) {
       if (scoped) {

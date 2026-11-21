@@ -45,7 +45,7 @@ export function createFileTree(files = []) {
       const sourceName = original.sourceName || (sameScope ? inherited.sourceName : '') || sourceId;
       // Explicit paths are canonical. Only path-less nested DTOs use their parent.
       const path = cleanPath(original.path || [sameScope ? parentPath : '', original.name].filter(Boolean).join('/'));
-      if (!path) continue;
+      if (!path || path.split('/').some(part => /^(?:\.git(?:ignore|attributes|modules|keep)?|\.github|\.gitlab|\.gitlab-ci\.yml)$/i.test(part))) continue;
       const file = {...original, path, name: original.name || basename(path)};
       if (sourceId) file.sourceId = sourceId;
       if (sameScope && inherited.readonly) file.readonly = true;

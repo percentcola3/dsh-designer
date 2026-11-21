@@ -1,72 +1,72 @@
-// AIPanel owns these rules in both layouts; all selectors stay inside the panel.
-// The parent owns panel placement, width and drag handles.
+// DSH owns transcript layout and interaction cards. These rules adapt the
+// surrounding designer panel and public theme variables to its compact seat.
 export const aiDockStyles = `
-.wb .wb-ai.wb-ai-dock,.wb .wb-ai.wb-ai-sidebar{min-height:0;overflow:hidden;container-type:inline-size}
-@container(max-width:450px){.wb-ai .wb-native-compose-permission .wb-native-compose-label{display:none}.wb-ai .wb-designer-compose-system-label{max-width:58px}.wb-ai .wb-designer-compose-left,.wb-ai .wb-designer-compose-right,.wb-ai .wb-designer-compose-native{gap:2px}.wb-ai .wb-native-compose-control{padding-inline:5px}}
+.wb .wb-ai.wb-ai-dock,.wb .wb-ai.wb-ai-sidebar{
+ min-width:0;min-height:0;overflow:hidden;container-type:inline-size;
+ --dsh-composer-side-clearance:0px;--dsh-chat-content-width:100%;
+ --dsh-content-font-size:13px;--dsh-content-font-size-secondary:12px;
+ --dsw-alias-bg-base:var(--wb-panel);--dsw-alias-bg-layer-1:var(--wb-panel);--dsw-alias-bg-layer-2:var(--wb-soft);
+ --dsw-alias-bg-module-platform:var(--wb-panel);--dsw-alias-bg-overlay:var(--wb-elevated);--dsw-specific-input-major:var(--wb-soft);
+ --dsw-specific-bubble:var(--wb-soft);--dsw-specific-bubble-highlight:var(--wb-hover);
+ --dsw-alias-label-primary:var(--wb-text);--dsw-alias-label-secondary:var(--wb-text);--dsw-alias-label-tertiary:var(--wb-muted);--dsw-alias-label-caption:var(--wb-faint);
+ --dsw-alias-label-dimmed:var(--wb-faint);--dsw-alias-label-primary-foreground:var(--wb-on-brand);
+ --dsw-alias-border-l1:var(--wb-divider);--dsw-alias-border-l2:var(--wb-divider);--dsw-alias-border-l3:var(--wb-divider);--dsw-alias-border-l4:var(--wb-divider);
+ --dsw-alias-border-l2-darkmode-thin:var(--wb-divider);--dsw-alias-separator-primary:var(--wb-divider);
+ --dsw-alias-markdown-inline-code:var(--wb-soft);--dsw-alias-markdown-code-block:var(--wb-soft);
+ --dsw-alias-interactive-bg-hover:var(--wb-hover);--dsw-alias-interactive-bg-hover-solid:var(--wb-hover);
+ --dsw-alias-button-info-fill:var(--wb-brand-action);--dsw-alias-state-business-primary:var(--wb-brand-ink);
+ --dsw-specific-sidebar-nav-item-active-accent:var(--wb-brand-soft);
+ --dsw-alias-button-floating-fill:var(--wb-panel);--dsw-alias-button-floating-hover:var(--wb-hover);
+ --dsw-alias-turn-trigger-bg:var(--wb-soft);--dsw-alias-turn-trigger-bg-hover:var(--wb-hover);
+ --dsw-alias-scrollbar-bg-l2:var(--wb-divider);--dsw-alias-scrollbar-hover-l2:var(--wb-faint);--dsw-focus-ring-color:var(--wb-focus);
+}
 .wb .wb-ai [hidden]{display:none}
-.wb .wb-ai .wb-ai-header{flex:0 0 auto;flex-wrap:wrap;gap:6px;min-width:0}
-.wb .wb-ai .wb-ai-layout-switch{display:flex;align-items:center;gap:2px;flex-shrink:0}
-.wb .wb-ai .wb-ai-layout-switch .wb-button,.wb .wb-ai .wb-ai-history-toggle{min-height:28px;padding:3px 6px;font-size:11px}
-.wb .wb-ai .wb-ai-layout-switch .wb-button[aria-pressed=true]{background:var(--wb-soft);color:var(--wb-accent);border-color:var(--wb-border)}
-.wb .wb-ai .wb-ai-conversation{position:relative;display:flex;flex-direction:column;flex:1 1 0;min-width:0;min-height:0;overflow:hidden}
-.wb .wb-ai .wb-ai-messages{flex:1 1 0;min-height:0;min-width:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scroll-padding-bottom:40px}
-.wb .wb-ai .wb-ai-messages>*{flex-shrink:0}
-.wb .wb-ai .wb-message{overflow-wrap:anywhere;min-width:0}
-.wb .wb-ai .wb-ai-empty{padding:4px 0;line-height:1.7}
-.wb .wb-ai .wb-ai-jump-latest{position:absolute;bottom:8px;right:12px;min-height:28px;padding:3px 10px;font-size:11px;box-shadow:var(--wb-shadow);background:var(--wb-bg)}
-.wb .wb-ai .wb-ai-task-status{display:flex;flex-direction:column;flex:0 0 auto;gap:2px;padding:7px 13px;border-top:1px solid var(--wb-border);font-size:11px;color:var(--wb-muted);overflow-wrap:anywhere;max-height:100px;overflow:auto}
-.wb .wb-ai .wb-ai-task-status>strong{font-weight:500}
-.wb .wb-ai .wb-ai-task-status[data-state=completed]{color:var(--wb-accent)}
-.wb .wb-ai .wb-ai-task-status[data-state=error]{color:var(--wb-danger)}
-.wb .wb-ai .wb-ai-compose{flex:0 0 auto;min-width:0;min-height:0}
-.wb .wb-ai .wb-error{flex-shrink:0;overflow-wrap:anywhere}
-.wb .wb-ai.wb-ai-sidebar{position:relative;inset:auto;width:100%;min-width:0;max-width:none;flex:1 1 auto;height:100%;max-height:100%;border:1px solid var(--wb-border);border-radius:14px;box-shadow:var(--wb-shadow-soft)}
-.wb .wb-ai .wb-ai-sidebar-target-toggle{display:flex;justify-content:space-between;flex:0 0 auto;min-width:0;min-height:30px;margin:0 10px 5px;padding:4px 7px;font-size:11px;background:var(--wb-soft)}
-.wb .wb-ai-sidebar-target-toggle>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.wb .wb-ai-sidebar .wb-ai-target{flex:0 1 auto;min-height:0;max-height:min(240px,30%);overflow:auto;overscroll-behavior:contain}
-.wb .wb-ai-sidebar .wb-ai-header>.wb-grow{min-width:100px}
-.wb .wb-ai-sidebar .wb-ai-compose textarea{max-height:min(180px,24dvh)}
-.wb .wb-ai.wb-ai-dock{
-  position:relative;inset:auto;width:100%;min-width:0;max-width:none;
-  height:auto;max-height:min(680px,calc(100dvh - 110px));flex:0 1 auto;
-  border:1px solid var(--wb-border);border-radius:16px;background:var(--wb-panel);
-  box-shadow:0 12px 40px color-mix(in srgb,var(--wb-text) 13%,transparent),0 2px 8px color-mix(in srgb,var(--wb-text) 5%,transparent);
-  z-index:10;
+.wb .wb-ai .wb-ai-header{display:flex;align-items:center;flex:0 0 auto;gap:3px;min-height:36px;padding:3px 8px;border-bottom:1px solid var(--wb-divider);background:transparent}
+.wb .wb-ai .wb-ai-header>strong{display:flex;align-items:center;gap:6px;min-width:0;margin-right:4px;font-size:12px;font-weight:600}
+.wb .wb-ai .wb-ai-header .wb-button{display:grid;place-items:center;width:26px;height:26px;min-height:26px;padding:4px;border:0;background:transparent;color:var(--wb-muted)}
+.wb .wb-ai .wb-ai-header .wb-button:hover{background:var(--wb-soft);color:var(--wb-brand-ink)}
+.wb .wb-ai .wb-ai-layout-switch{display:flex;flex:none}
+.wb .wb-ai .wb-ai-conversation,.wb-native-conversation{position:relative;display:flex;flex-direction:column;flex:1 1 0;min-width:0;min-height:0;overflow:hidden}
+.wb-native-conversation{--dsh-chat-flow-gap:6px}
+/* The panel background takes precedence over Host ambient conversation themes. */
+.wb .wb-ai .wb-native-conversation [data-conversation-scroll]{background:var(--wb-panel)}
+.wb .wb-native-conversation [data-message-bubble]{background:var(--wb-soft)!important;color:var(--wb-text)!important;border:0!important;border-radius:12px!important;box-shadow:none!important}
+.wb .wb-native-conversation [data-message-bubble]::after{content:none!important}
+/* External conversation themes add decorative rails to these native prose seats. */
+.wb .wb-native-conversation [data-chat-flow-kind="assistant-step"]:not([data-chat-group-part="reasoning"]) [data-slot="conversation.chat.node"]>div>div>div:not([data-turn-process-inline]):not(:has([data-variant="think"])){
+ padding:0!important;border:0!important;background:none!important;font-family:inherit!important;line-height:1.6!important
 }
-.wb .wb-ai.wb-ai-dock:focus-within{border-color:color-mix(in srgb,var(--wb-brand-ink) 40%,transparent)}
-.wb .wb-ai-dock .wb-ai-header{padding:7px 10px;border:0;background:transparent}
-.wb .wb-ai-dock .wb-ai-header .wb-button{min-height:28px;padding:3px 7px;border-color:transparent;background:transparent;font-size:11px}
-.wb .wb-ai-dock .wb-ai-dock-mark{padding-inline:3px;color:var(--wb-accent);font-size:16px;flex-shrink:0}
-.wb .wb-ai-dock .wb-ai-dock-target{justify-content:flex-start;flex-shrink:1;overflow:hidden;text-align:left;min-width:100px}
-.wb .wb-ai-dock .wb-ai-dock-target-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-.wb .wb-ai-dock .wb-ai-dock-scope{flex-shrink:0;color:var(--wb-muted);font-size:10px}
-.wb .wb-ai-dock .wb-ai-history-toggle{color:var(--wb-muted)}
-.wb .wb-ai-dock .wb-ai-target{
-  flex:0 1 auto;min-height:0;max-height:min(220px,28dvh);overflow:auto;
-  gap:7px;padding:10px 14px;border-block:1px solid var(--wb-border);font-size:11px;
-}
-.wb .wb-ai-dock .wb-ai-target>strong,.wb .wb-ai-dock .wb-ai-target p{overflow-wrap:anywhere}
-.wb .wb-ai-dock .wb-ai-target label.wb-row>select{max-width:65%}
-.wb .wb-ai-dock .wb-ai-conversation{flex:0 1 180px;max-height:220px}
-.wb .wb-ai-dock .wb-ai-conversation[data-has-messages=false]{flex-basis:64px}
-.wb .wb-ai-dock .wb-ai-messages{padding:12px 14px;gap:10px;border-top:1px solid var(--wb-border);font-size:12px}
-.wb .wb-ai-dock .wb-ai-compose{padding:0 12px 10px;gap:7px;border:0}
-.wb .wb-ai-dock .wb-ai-compose textarea{
-  min-height:58px;height:58px;max-height:140px;resize:vertical;padding:8px 10px;
-  line-height:20px;font-size:13px;border:0;border-radius:10px;background:transparent;box-shadow:none;outline:none;
-}
-.wb .wb-ai-dock .wb-ai-compose>.wb-row{gap:6px;flex-wrap:wrap}
-.wb .wb-ai-dock .wb-ai-compose .wb-button{min-height:29px;padding:4px 9px;font-size:11px;line-height:19px}
-.wb .wb-ai-dock .wb-references{max-height:62px;gap:5px}
-.wb .wb-ai-dock .wb-references:empty{display:none}
-.wb .wb-ai-dock .wb-reference{max-width:min(300px,100%);font-size:11px}
-.wb .wb-ai-dock .wb-reference>button:first-child{min-width:0}
-.wb .wb-ai-dock .wb-reference>button:last-child{flex-shrink:0;min-width:18px;min-height:22px}
-.wb .wb-ai-dock .wb-ai-history-actions{padding-top:7px;border-top:1px solid var(--wb-border)}
-@media(max-width:520px){
-  .wb .wb-ai-dock .wb-ai-header{gap:3px;padding-inline:7px}
-  .wb .wb-ai-dock .wb-ai-dock-scope{max-width:70px;overflow:hidden;text-overflow:ellipsis}
-  .wb .wb-ai-dock .wb-ai-compose{padding-inline:10px}
-  .wb .wb-ai-dock .wb-shortcuts{font-size:0}
+.wb .wb-native-conversation [data-chat-flow-kind="assistant-step"] [data-slot="conversation.chat.node"]>div>div>div::before,
+.wb .wb-native-conversation [data-chat-flow-kind="assistant-step"] [data-slot="conversation.chat.node"]>div>div>div::after{content:none!important}
+.wb .wb-native-conversation [data-chat-flow-kind="assistant-step"] :is(h1,h2,h3,h4,strong,code,blockquote,th){color:var(--wb-text)!important}
+.wb .wb-native-conversation [data-chat-flow-kind="assistant-step"] a{color:var(--wb-brand-ink)!important}
+.wb .wb-native-conversation [data-chat-flow-kind="assistant-step"] :is(h2,blockquote)::before,
+.wb .wb-native-conversation [data-chat-flow-kind="assistant-step"] :is(h2,blockquote)::after{content:none!important}
+.wb .wb-native-conversation :is(input,textarea,[contenteditable=true]){caret-color:var(--wb-text)!important}
+.wb .wb-native-conversation [data-conversation-content]{--dsh-chat-content-width:100%;--dsh-composer-card-max-width:100%;--dsh-composer-side-clearance:0px;--dsh-composer-dock-inset:0px;min-width:0}
+.wb .wb-native-conversation [data-composer-seat]{max-height:min(420px,60dvh);overflow:auto}
+.wb-native-conversation [data-chat-flow]{font-size:13px;line-height:1.6}
+.wb .wb-ai .wb-ai-conversation[hidden]{display:none}
+.wb .wb-ai .wb-ai-empty{padding:12px 16px;line-height:1.6;font-size:12px}
+.wb .wb-ai .wb-ai-target{flex:0 1 auto;min-height:0;max-height:240px;overflow:auto;gap:6px;padding:10px 12px;font-size:11px;background:var(--wb-soft)}
+.wb .wb-ai .wb-ai-target>strong,.wb .wb-ai .wb-ai-target p{overflow-wrap:anywhere}
+.wb .wb-ai .wb-ai-target label.wb-row>select{max-width:65%}
+.wb .wb-ai .wb-ai-compose{flex:none;min-width:0;min-height:0;padding:7px 8px 8px;border-top:1px solid var(--wb-divider)}
+.wb .wb-ai .wb-ai-compose .wb-designer-compose-input{min-height:52px;max-height:140px;padding:9px 11px;font-size:13px;line-height:20px}
+.wb .wb-ai .wb-designer-compose-toolbar{min-height:32px;padding:3px 0 5px;margin-inline:8px}
+.wb .wb-ai.wb-ai-sidebar{position:relative;inset:auto;flex:1 1 auto;width:100%;max-width:none;height:100%;max-height:100%;border:1px solid var(--wb-divider);border-radius:12px;box-shadow:var(--wb-shadow-soft)}
+/* Compact and expanded seats keep the same native transcript and composer.
+   Only the viewport height changes, including after a request has finished. */
+.wb .wb-ai.wb-ai-dock{position:relative;inset:auto;flex:0 1 auto;width:100%;max-width:none;height:min(360px,calc(100dvh - 130px));max-height:100%;border:1px solid var(--wb-divider);border-radius:12px;background:var(--wb-panel);box-shadow:var(--wb-shadow-hover)}
+.wb .wb-ai.wb-ai-dock[data-conversation-expanded=true]{height:min(560px,calc(100dvh - 130px))}
+.wb .wb-ai-dock .wb-ai-conversation{flex:1 1 0;min-height:0}
+.wb .wb-ai-dock .wb-ai-compose{padding:5px 6px 6px}
+.wb .wb-ai-dock .wb-ai-compose .wb-designer-compose-input{min-height:34px;max-height:80px;padding:6px 8px}
+.wb .wb-ai-dock .wb-designer-compose-chip-label{max-width:180px}
+@container(max-width:450px){
+ .wb-ai .wb-native-compose-permission .wb-native-compose-label{display:none}
+ .wb-ai .wb-designer-compose-system-label{max-width:58px}
+ .wb-ai .wb-designer-compose-left,.wb-ai .wb-designer-compose-right,.wb-ai .wb-designer-compose-native{gap:2px}
+ .wb-ai .wb-native-compose-control{padding-inline:5px}
 }
 `;

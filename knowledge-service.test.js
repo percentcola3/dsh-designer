@@ -236,3 +236,56 @@ test('fresh native library imports and auto-indexes without any model cache, the
 test('archive invalidates frozen references and preserves permanently stored originals',async()=>{
   const f=fixture(),v=await ready(f),r=await reference(f,v.knowledge);const archived=await f.service.execute({action:'knowledge.archive',knowledgeId:v.knowledge.id,expectedRevision:v.knowledge.revision},user);assert.equal(archived.knowledge.archived,true);assert.equal(archived.knowledge.contentRevision,v.knowledge.contentRevision+1);assert.equal((await f.service.execute({action:'knowledge.list'},user)).knowledge.length,0);await assert.rejects(f.service.resolveReference(r.project,r.reference,r.env),{code:'REFERENCE_NOT_FOUND'});assert.deepEqual(await original(f,v.knowledge,v.document),Buffer.from('# Example\nButton primary color green\nShared component docs\n'));
 });
+
+test('owner text edits replace one immutable original, preserve the old download and refresh search versions',async()=>{
+  const f=fixture(),k=await create(f),first=await f.service.importFiles({knowledgeId:k.id,expectedRevision:k.revision,autoIndex:false,files:[{name:'guide.md',bytes:Buffer.from('Before')}]},user);
+  const before=first.documents[0],old=await f.service.getDocument({knowledgeId:k.id,documentId:before.id},user);
+  const saved=await f.service.execute({action:'knowledge.document.write',knowledgeId:k.id,expectedRevision:first.knowledge.revision,documentId:before.id,expectedSha256:before.sha256,content:'After 中文'},user);
+  await f.service.waitForIdle(k.id);
+  assert.notEqual(saved.document.id,before.id);
+  const current=(await status(f,k)).knowledge;
+  assert.equal(current.documents.length,1);
+  assert.equal(current.index.state,'ready');
+  assert.deepEqual(await original(f,current,current.documents[0]),Buffer.from('After 中文'));
+  assert.deepEqual((await resource(f,old.originalUrl)).body,Buffer.from('Before'));
+  assert.deepEqual((await f.service.record(k.id)).value.lastImport.documentIds,[]);
+  await assert.rejects(f.service.execute({action:'knowledge.document.write',knowledgeId:k.id,expectedRevision:current.revision,documentId:saved.document.id,expectedSha256:before.sha256,content:'stale'},user),{code:'VERSION_CONFLICT'});
+});
+
+test('file move and removal are atomic, reject collisions and support recovery from retained originals',async()=>{
+  const f=fixture(),k=await create(f),first=await f.service.importFiles({knowledgeId:k.id,expectedRevision:k.revision,autoIndex:false,files:[{name:'one.md',relativePath:'docs/one.md',bytes:Buffer.from('one')},{name:'two.md',relativePath:'docs/two.md',bytes:Buffer.from('two')}]},user);
+  const [one,two]=first.documents;
+  await assert.rejects(f.service.execute({action:'knowledge.document.move',knowledgeId:k.id,expectedRevision:first.knowledge.revision,files:[{documentId:one.id,relativePath:'docs/two.md'}]},user),{code:'FILE_EXISTS'});
+  let moved=await f.service.execute({action:'knowledge.document.move',knowledgeId:k.id,expectedRevision:first.knowledge.revision,files:[{documentId:one.id,relativePath:'renamed/one.md'},{documentId:two.id,relativePath:'renamed/two.md'}]},user);
+  await f.service.waitForIdle(k.id);moved=await status(f,k);
+  assert.ok(moved.knowledge.documents.every(doc=>doc.relativePath.startsWith('renamed/')));
+  const removed=await f.service.execute({action:'knowledge.document.remove',knowledgeId:k.id,expectedRevision:moved.knowledge.revision,documentIds:[one.id,two.id]},user);
+  assert.equal(removed.knowledge.documents.length,0);
+  assert.equal(removed.knowledge.index.state,'not-indexed');
+  const restored=await f.service.execute({action:'knowledge.document.copy',knowledgeId:k.id,sourceKnowledgeId:k.id,expectedRevision:removed.knowledge.revision,files:removed.removed.map(doc=>({documentId:doc.id,expectedSha256:doc.sha256,relativePath:doc.relativePath}))},user);
+  await f.service.waitForIdle(k.id);
+  assert.equal(restored.documents.length,2);
+  assert.deepEqual(await original(f,restored.knowledge,restored.documents[0]),Buffer.from('one'));
+  assert.ok(restored.documents.every(doc=>doc.relativePath.startsWith('renamed/')));
+});
+
+test('binary replacement targets the exact document and text editing refuses binary or malformed UTF-8',async()=>{
+  const f=fixture(),k=await create(f),first=await upload(f,k,{name:'photo.png',mimeType:'image/png',bytes:Buffer.from([1,2,255])});
+  await assert.rejects(f.service.execute({action:'knowledge.document.write',knowledgeId:k.id,expectedRevision:first.knowledge.revision,documentId:first.document.id,expectedSha256:first.document.sha256,content:'wrong'},user),{code:'KNOWLEDGE_FILE_NOT_EDITABLE'});
+  const replaced=await f.service.upload({knowledgeId:k.id,expectedRevision:first.knowledge.revision,documentId:first.document.id,expectedSha256:first.document.sha256,name:'photo.png',relativePath:'photo.png',mimeType:'image/png',bytes:Buffer.from([7,8,9])},user);
+  assert.equal(replaced.knowledge.documents.length,1);
+  assert.deepEqual(await original(f,replaced.knowledge,replaced.document),Buffer.from([7,8,9]));
+  await assert.rejects(f.service.execute({action:'knowledge.document.write',knowledgeId:k.id,expectedRevision:replaced.knowledge.revision,relativePath:'made-up.pdf',content:'text'},user),{code:'KNOWLEDGE_FILE_NOT_EDITABLE'});
+  const invalid=await upload(f,replaced.knowledge,{name:'broken.txt',bytes:Buffer.from([255])});
+  await assert.rejects(f.service.execute({action:'knowledge.document.write',knowledgeId:k.id,expectedRevision:invalid.knowledge.revision,documentId:invalid.document.id,expectedSha256:invalid.document.sha256,content:'wrong'},user),{code:'KNOWLEDGE_FILE_NOT_EDITABLE'});
+});
+
+test('file mutation APIs enforce owner context, revisions, active imports and private destination paths',async()=>{
+  const f=fixture(),k=await create(f),first=await upload(f,k);
+  for(const action of ['knowledge.document.write','knowledge.document.move','knowledge.document.copy','knowledge.document.remove'])await assert.rejects(f.service.execute({action,knowledgeId:k.id}),{code:'USER_ONLY'});
+  await assert.rejects(f.service.execute({action:'knowledge.document.remove',knowledgeId:k.id,expectedRevision:k.revision,documentIds:[first.document.id]},user),{code:'VERSION_CONFLICT'});
+  await assert.rejects(f.service.execute({action:'knowledge.document.move',knowledgeId:k.id,expectedRevision:first.knowledge.revision,files:[{documentId:first.document.id,relativePath:'../escape.md'}]},user),{code:'INVALID_PATH'});
+  await assert.rejects(f.service.execute({action:'knowledge.document.move',knowledgeId:k.id,expectedRevision:first.knowledge.revision,files:[{documentId:first.document.id,relativePath:'.env'}]},user),{code:'PRIVATE_KNOWLEDGE_PATH'});
+  const batch=await f.service.beginImport({knowledgeId:k.id,expectedRevision:first.knowledge.revision},user);
+  await assert.rejects(f.service.execute({action:'knowledge.document.remove',knowledgeId:k.id,expectedRevision:batch.knowledge.revision,documentIds:[first.document.id]},user),{code:'IMPORT_IN_PROGRESS'});
+});

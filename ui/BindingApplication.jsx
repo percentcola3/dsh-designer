@@ -22,7 +22,7 @@ export default function BindingApplication({project,design,pages,selection={},ap
       const binding=await api('binding.resolve',{projectId:project.id,designId:design.id});
       if(!current(ticket))return;
       const effective=binding.effectiveBinding||binding.binding||binding;
-      if(!effective.systemId)throw errorValue('当前设计没有已绑定的固定规范版本，请先确认绑定。','NO_SYSTEM');
+      if(!effective.systemId)throw errorValue('当前设计没有已绑定的设计规范，请先确认绑定。','NO_SYSTEM');
       setPrepared({...scope,binding:effective});
     } catch(error) {if(current(ticket))setError(error);} finally {if(current(ticket))setBusy(false);}
   };
@@ -62,13 +62,13 @@ export default function BindingApplication({project,design,pages,selection={},ap
   const refresh=async()=>{const ticket=begin();setBusy(true);setError(null);try{await api('workspace.open',{projectId:project.id});}catch(error){if(current(ticket))setError(error);}finally{if(current(ticket))setBusy(false);}};
   return <section className="wb-stack" style={{borderTop:'1px solid var(--wb-border)',paddingTop:12}}>
     <h3>按已绑定规范更新设计</h3>
-    <p className="wb-muted">先确认页面或对象范围与固定规范版本。已提交的任务保留当时的范围，绑定切换也不会改写它。</p>
-    {applied&&<div className="wb-message wb-stack"><strong>最近应用 · v{applied.version} · {state.label}</strong><span>实际保存页面 · {state.savedPageIds.length}{state.savedPageIds.length?' / '+state.savedPageIds.join(', '):''}</span><span>视觉核对 · {state.visualLabel}</span><Button disabled={busy} onClick={refresh}>刷新实际保存状态</Button></div>}
+    <p className="wb-muted">先确认页面或对象范围与设计规范。已提交的任务保留当时的范围，绑定切换也不会改写它。</p>
+    {applied&&<div className="wb-message wb-stack"><strong>最近应用 · {state.label}</strong><span>实际保存页面 · {state.savedPageIds.length}{state.savedPageIds.length?' / '+state.savedPageIds.join(', '):''}</span><span>视觉核对 · {state.visualLabel}</span><Button disabled={busy} onClick={refresh}>刷新实际保存状态</Button></div>}
     <label>应用范围<select disabled={busy||!!retry} value={scopeMode} onChange={event=>changeScope(event.target.value)}><option value="design">当前设计的全部现有页面</option><option value="pages">指定页面</option><option value="selection">当前画布所选对象</option></select></label>
     {scopeMode==='pages'&&<div role="group" aria-label="选择更新规范的页面" className="wb-stack">{designPages.map(page=><label className="wb-row" key={page.id}><input type="checkbox" disabled={busy||!!retry} checked={selectedIds.includes(page.id)} onChange={event=>changeScope('pages',event.target.checked?[...selectedIds,page.id]:selectedIds.filter(id=>id!==page.id))}/>{page.name}</label>)}</div>}
     {scopeMode==='selection'&&<p className="wb-muted">{designPages.find(page=>page.id===selection.pageId)?.name||'当前设计尚未选择页面'} · {selection.nodeIds?.length||0} 个所选对象</p>}
     <Button disabled={busy||!!retry||!design||!designPages.length} onClick={prepare}>预告所选范围的更新</Button>
-    {prepared&&<div className="wb-message wb-stack"><strong>{prepared.designName} · {prepared.args.pageIds.length} 个页面{prepared.args.nodeIds?.length?' · '+prepared.args.nodeIds.length+' 个对象':''}</strong><p className="wb-muted">{prepared.pageNames.join(' / ')}</p><p>固定规范 · {prepared.binding.system?.name||prepared.binding.systemId} v{prepared.binding.version} · 来源 {prepared.binding.source}</p>{!retry&&<div className="wb-row"><Button primary disabled={busy} onClick={()=>submit(prepared.args)}>确认按此范围启动规范更新</Button><Button disabled={busy} onClick={()=>setPrepared(null)}>取消</Button></div>}</div>}
+    {prepared&&<div className="wb-message wb-stack"><strong>{prepared.designName} · {prepared.args.pageIds.length} 个页面{prepared.args.nodeIds?.length?' · '+prepared.args.nodeIds.length+' 个对象':''}</strong><p className="wb-muted">{prepared.pageNames.join(' / ')}</p><p>设计规范 · {prepared.binding.system?.name||prepared.binding.systemId} · 来源 {prepared.binding.source}</p>{!retry&&<div className="wb-row"><Button primary disabled={busy} onClick={()=>submit(prepared.args)}>确认按此范围启动规范更新</Button><Button disabled={busy} onClick={()=>setPrepared(null)}>取消</Button></div>}</div>}
     <ErrorBox error={error}/>
     {retry&&<div className="wb-message wb-stack"><p>现有 AI 任务忙碌。应用范围已登记为待执行。</p><span className="wb-muted">待执行记录 · {retry.args.applicationIds.join(', ')}</span><div className="wb-row"><Button primary disabled={busy} onClick={retryPending}>重试待执行任务（复用原范围）</Button><Button disabled={busy} onClick={()=>{setRetry(null);setPrepared(null);}}>重新选择范围</Button></div></div>}
     {outcome&&<div className="wb-message wb-stack"><strong>{state.status==='applied'?'当前范围内容已保存':state.status==='partial'?'已有部分页面保存':outcome.ai?.accepted?'任务已接受，正在执行':'规范应用请求已登记'}</strong><p className="wb-muted">实际保存页面以任务回执为准；视觉核对单独记录。</p></div>}

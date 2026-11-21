@@ -35,7 +35,19 @@ export function projectPreviewDocument(html,{assetBase,projectId,origin=globalTh
   };
   const css=value=>value.replace(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*))\s*\)/gi,(_all,a,b,c)=>`url(${JSON.stringify(resolve((a??b??c).trim()))})`).replace(/@import\s+(['"])(.*?)\1/gi,(_all,_q,url)=>`@import url(${JSON.stringify(resolve(url))})`);
   const doc=parse(html);
-  if(isBlankProjectPreviewDocument(doc))return null;
+  // Compiled React/Vue pages mount into an empty root using scripts. The
+  // static card strips those scripts, so show its default cover instead.
+  const htmlNode = doc.childNodes.find(node => node.tagName === 'html');
+  const body = htmlNode?.childNodes.find(node => node.tagName === 'body');
+  const head = htmlNode?.childNodes.find(node => node.tagName === 'head');
+  const frameworkRuntime = head?.childNodes.some(node => node.tagName === 'script'
+    && node.attrs?.some(attr => attr.name === 'data-dsh-framework-runtime'));
+  const emptyFrameworkRoot = body?.childNodes.every(node => node.tagName === 'script'
+    || node.nodeName === '#comment'
+    || node.nodeName === '#text' && !node.value.trim()
+    || node.tagName === 'div' && node.attrs?.some(attr => attr.name === 'id' && attr.value === 'root')
+      && node.childNodes.every(child => child.nodeName === '#text' && !child.value.trim()));
+  if(isBlankProjectPreviewDocument(doc) || frameworkRuntime && emptyFrameworkRoot)return null;
   const walk=node=>{
     node.childNodes=(node.childNodes||[]).filter(child=>!['script','iframe','object','embed','base'].includes(child.tagName)&&!(child.tagName==='meta'&&(child.attrs||[]).some(a=>a.name==='http-equiv'&&/^(?:refresh|content-security-policy)$/i.test(a.value))));
     node.attrs=(node.attrs||[]).filter(a=>!/^on/i.test(a.name)&&a.name!=='autofocus');
@@ -43,7 +55,6 @@ export function projectPreviewDocument(html,{assetBase,projectId,origin=globalTh
     if(node.tagName==='style')for(const child of node.childNodes)if(child.nodeName==='#text')child.value=css(child.value);
     for(const child of node.childNodes)walk(child);if(node.content)walk(node.content);
   };walk(doc);
-  const head=doc.childNodes.find(n=>n.tagName==='html')?.childNodes.find(n=>n.tagName==='head');
   if(!head)return null;
   const local=asset?.root||'',policy=`default-src 'none'; script-src 'none'; img-src data: ${local}; style-src 'unsafe-inline' ${local}; font-src data: ${local}; connect-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri ${local||"'none'"}; navigate-to 'none'`;
   const extra=parse(`<html><head><meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="referrer" content="no-referrer"></head></html>`).childNodes.find(n=>n.tagName==='html').childNodes.find(n=>n.tagName==='head').childNodes;

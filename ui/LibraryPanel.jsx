@@ -1,15 +1,35 @@
 import React from "react";
-import { Button, Modal, ErrorBox, FieldError, downloadValue } from "./common.jsx";
+import { Button, Modal, ErrorBox, FieldError, useDownload } from "./common.jsx";
 import ResourceView from "./ResourceView.jsx";
 import { uploadFile } from "./upload.js";
 import { readSystemResource, isTextSystemResource, replaceSystemResource, systemResourceFileBody, inlineSystemResource } from "./system-resource.js";
 import { systemVersionForm, parseSystemVersionDraft, systemVersionDraftKey, hasSystemVersionChanges, applySystemResourceDraft } from './system-version.js';
 import {Icon} from './brand.jsx';
 import galleryStyles from './resource-gallery-styles.js';
+import ResourceCardCover from './ResourceCardCover.jsx';
 import {skillFileDraft,skillFileDraftChanged,downloadedSkillFileDraft} from './skill-file-draft.js';
 
 function LibraryPanel({ kind, api, library, onRefresh, registerGuard, onAddSkill }) {
+  const downloadValue=useDownload();
   const [systems, setSystems] = React.useState(library.systems || []), [skills, setSkills] = React.useState([]), [projectId, setProjectId] = React.useState(""), [enabled, setEnabled] = React.useState([]), [project, setProject] = React.useState(null), [query, setQuery] = React.useState(""), [modal, setModal] = React.useState(null), [error, setError] = React.useState(null), [busy, setBusy] = React.useState(false), [decision, setDecision] = React.useState(null);
+  const [hiddenSkills, setHiddenSkills] = React.useState([]), [showHidden, setShowHidden] = React.useState(false);
+  const rootRef = React.useRef(null);
+  const visibilityKey = `dsh-designer:hidden-skills:1:${encodeURIComponent(library.root || 'default')}`;
+  React.useEffect(() => {
+    try { const value = JSON.parse(localStorage.getItem(visibilityKey) || '[]'); setHiddenSkills(Array.isArray(value) ? value.filter(name => typeof name === 'string') : []); }
+    catch { setHiddenSkills([]); }
+    setShowHidden(false);
+  }, [visibilityKey]);
+  React.useEffect(() => {
+    const outside = event => rootRef.current?.querySelectorAll('.wb-skill-card-menu[open]').forEach(menu => { if (!menu.contains(event.target)) menu.open = false; });
+    document.addEventListener('pointerdown', outside);
+    return () => document.removeEventListener('pointerdown', outside);
+  }, []);
+  const toggleHidden = skill => {
+    const next = hiddenSkills.includes(skill.name) ? hiddenSkills.filter(name => name !== skill.name) : [...hiddenSkills, skill.name];
+    setHiddenSkills(next);
+    try { localStorage.setItem(visibilityKey, JSON.stringify(next)); } catch { setSkillNotice('隐藏偏好暂时仅在本次工作台中保留。'); }
+  };
   // Session memory only: never write draft bytes to the shared library or browser storage.
   const drafts = React.useRef(new Map()), lastKept = React.useRef(new Map()), skillDraft=React.useRef(null);
   const [skillNotice,setSkillNotice]=React.useState('');
@@ -109,7 +129,7 @@ function LibraryPanel({ kind, api, library, onRefresh, registerGuard, onAddSkill
   };
   const downloadSkill = (form,close=false) => work(async()=>{
     const file=skillFileDraft(form);
-    downloadValue(file);
+    await downloadValue(file);
     skillDraft.current=null;
     setSkillNotice(`已发起 ${file.name} 下载，待安装。保存到 DSH 技能目录后，刷新即可使用。`);
     setDecision(null);
@@ -169,9 +189,9 @@ function LibraryPanel({ kind, api, library, onRefresh, registerGuard, onAddSkill
     await onRefresh();
   });
   const matching = item => `${item.name||''} ${item.description||''}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
-  const visibleSystems=systems.filter(matching),visibleSkills=skills.filter(matching);
+  const visibleSystems=systems.filter(matching),visibleSkills=skills.filter(skill => matching(skill) && (showHidden ? hiddenSkills.includes(skill.name) : !hiddenSkills.includes(skill.name)));
   const decisionView = decision && <div className="wb-card wb-stack" role="alertdialog" aria-label={decision.title}><strong>{decision.title}</strong><p>{decision.text}</p><div className="wb-row">{decision.actions.map(action => <Button key={action.label} disabled={busy} onClick={action.run}>{action.label}</Button>)}<Button disabled={busy} onClick={() => setDecision(null)}>继续编辑 / 取消离开</Button></div></div>;
-  return <section className="wb-resource-gallery" aria-label={kind==='systems'?'设计体系':'技能库'} aria-busy={busy}>
+  return <section ref={rootRef} className="wb-resource-gallery" aria-label={kind==='systems'?'设计体系':'技能库'} aria-busy={busy}>
     <style>{galleryStyles}</style>
     <header className="wb-resource-toolbar">
       <div className="wb-resource-search"><Icon name="search" size={16}/><input placeholder={kind==='systems'?'搜索设计体系…':'搜索技能…'} aria-label={kind==='systems'?'搜索设计体系':'搜索技能'} value={query} onChange={event=>setQuery(event.target.value)}/>{query&&<Button className="wb-ghost wb-icon-button" aria-label="清空搜索" onClick={()=>setQuery('')}><Icon name="x" size={14}/></Button>}</div>
@@ -188,14 +208,15 @@ function LibraryPanel({ kind, api, library, onRefresh, registerGuard, onAddSkill
         <p className="wb-resource-description">{system.description||'可复用的设计规范与资源'}</p>
         <div className="wb-resource-meta"><span>{(system.platforms||[]).map(platform=>platform==='mobile'?'移动端':platform==='web'?'Web':platform).join(' / ')||'平台未指定'}</span><span>v{system.version||system.revision}</span>{lastKept.current.has(system.id)&&<span>有保留草稿</span>}</div>
         <footer className="wb-resource-footer"><Button className="wb-resource-open" disabled={busy} onClick={()=>edit(system)}>打开<Icon name="arrow-right" size={14}/></Button></footer>
-      </article>):visibleSkills.map(skill=><article className="wb-resource-card" key={skill.name}>
-        <div className="wb-resource-card-header"><span className="wb-resource-icon" data-tone="coral"><Icon name="wand" size={20}/></span><h3 className="wb-resource-title">{skill.name}</h3></div>
-        <p className="wb-resource-description">{skill.description||'查看技能正文与使用说明'}</p>
-        <div className="wb-resource-meta" title={skillOrigin(skill)}><span>{skillOrigin(skill,true)}</span></div>
-        <footer className="wb-resource-footer"><Button className="wb-resource-open" disabled={busy} onClick={()=>openSkill(skill)}>打开<Icon name="arrow-right" size={14}/></Button><label className="wb-row" title={skillDisabledReason||'为所选项目启用此技能'}><input type="checkbox" aria-label={`为所选项目启用 ${skill.name}`} title={skillDisabledReason||undefined} disabled={Boolean(skillDisabledReason)} checked={project?.id===projectId&&enabled.includes(skill.name)} onChange={event=>toggleSkill(skill,event.target.checked)}/>项目启用</label></footer>
+      </article>):visibleSkills.map(skill=><article className="wb-project-card wb-skill-card" key={skill.name} aria-label={`技能 ${skill.name}`}>
+        <button type="button" className="wb-project-card-preview" aria-label={`打开技能 ${skill.name}`} disabled={busy} onClick={()=>openSkill(skill)}><ResourceCardCover kind="skill" label="设计技能" icon="skill" title={skill.name} description={skill.description||'查看技能正文与使用说明'}/></button>
+        <footer className="wb-gallery-card-meta wb-skill-card-actions"><label title={skillDisabledReason||'为所选项目启用此技能'}><input type="checkbox" aria-label={`为所选项目启用 ${skill.name}`} title={skillDisabledReason||undefined} disabled={Boolean(skillDisabledReason)} checked={project?.id===projectId&&enabled.includes(skill.name)} onChange={event=>toggleSkill(skill,event.target.checked)}/>启用</label><div className="wb-project-card-tools">
+          <button type="button" className="wb-project-card-tool" aria-label={`${showHidden?'恢复显示':'隐藏'}技能 ${skill.name}`} title={showHidden?'恢复显示':'隐藏'} disabled={busy} onClick={()=>toggleHidden(skill)}><Icon name={showHidden?'eye':'eye-off'} size={16}/></button>
+          <details className="wb-skill-card-menu" onKeyDown={event=>{if(event.key==='Escape'){event.currentTarget.open=false;event.currentTarget.querySelector('summary').focus();}}} onToggle={event=>{if(event.currentTarget.open)rootRef.current?.querySelectorAll('.wb-skill-card-menu[open]').forEach(menu=>{if(menu!==event.currentTarget)menu.open=false;});}}><summary className="wb-project-card-tool" aria-label={`${skill.name}的更多操作`} title="更多操作"><Icon name="more" size={18}/></summary><div className="wb-skill-card-menu-items"><button type="button" disabled={busy} onClick={event=>{event.currentTarget.closest('details').open=false;openSkill(skill);}}>查看技能正文</button><span title={skillOrigin(skill)}>{skillOrigin(skill,true)}</span></div></details>
+        </div></footer>
       </article>)}
     </div>
-    {(kind==='systems'?visibleSystems:visibleSkills).length===0&&<p className="wb-muted" role="status">{busy?'正在加载…':query.trim()?'没有匹配的结果':kind==='systems'?'暂无设计体系':'暂无可用技能'}</p>}
+    {(kind==='systems'?visibleSystems:visibleSkills).length===0&&<p className="wb-muted" role="status">{busy?'正在加载…':query.trim()?'没有匹配的结果':kind==='systems'?'暂无设计体系':showHidden?'暂无隐藏技能':'暂无可用技能'}</p>}
     {modal && <Modal title={modal.type==='skill-add'?'新增技能':modal.type==='system-add'?'新增设计体系':modal.type==='library-tools'?'更多操作':modal.type==='system-actions'?`${modal.system.name} · 更多操作`:modal.type === "resource" ? modal.tab.name : modal.type === "skill" ? modal.name : modal.id ? "编辑设计体系（保存为新版本）" : "新建设计体系"} onClose={closeModal} wide={['system','skill','resource'].includes(modal.type)}>
       {decisionView}
       <div inert={decision || busy ? true : undefined}>
@@ -207,7 +228,7 @@ function LibraryPanel({ kind, api, library, onRefresh, registerGuard, onAddSkill
         <label>技能正文<textarea aria-label="技能正文" required rows={10} maxLength={200000} value={modal.instructions} onChange={event=>update('instructions',event.target.value)}/></label>
         {modal.downloadedValues&&!skillFileDraftChanged(modal)&&<p className="wb-muted" role="status">已发起下载，待安装。</p>}
         <footer><Button disabled={busy} onClick={closeModal}>关闭</Button><Button primary type="submit" disabled={busy}>下载技能文件</Button></footer>
-      </form>:modal.type==='system-add'?<div className="wb-stack"><Button primary disabled={busy} onClick={()=>edit()}><Icon name="plus" size={16}/>创建空白体系</Button><label className="wb-button"><Icon name="file" size={16}/>导入体系包<input type="file" accept="application/json,.json" disabled={busy} hidden onChange={event=>{const file=event.target.files[0];event.target.value='';if(file)importPackage(file);}}/></label></div>:modal.type==='library-tools'?<div className="wb-stack">{kind==='skills'&&<label>配置项目技能<select aria-label="配置技能的项目" value={projectId} disabled={busy} onChange={event=>setProjectId(event.target.value)}><option value="">选择项目</option>{(library.projects||[]).filter(item=>!item.deletedAt&&!item.archived).map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}<Button disabled={busy} onClick={()=>work(async()=>{await refreshData();setModal(null);})}><Icon name="refresh" size={16}/>刷新</Button>{kind==='systems'&&drafts.current.size>0&&<><p className="wb-muted">已保留 {drafts.current.size} 份未保存版本草稿，仅在本次工作台中保留。</p>{[...drafts.current.values()].map(form=><Button key={systemVersionDraftKey(form)} disabled={busy} onClick={()=>restoreDraft(form)}>{form.name||'未命名体系'} · v{form.editingVersion||'新版本'} · 继续编辑</Button>)}</>}</div>:modal.type==='system-actions'?<div className="wb-stack"><Button disabled={busy} onClick={()=>work(async()=>{const result=await api('system.export',{systemId:modal.system.id});downloadValue({content:JSON.stringify(result.system,null,2),name:result.filename,mimeType:result.mimeType});setModal(null);})}>导出体系包</Button><Button disabled={busy} onClick={()=>work(async()=>{await api('system.copy',{systemId:modal.system.id,name:modal.system.name+' 副本'});await refreshData();await onRefresh();setModal(null);})}>复制体系</Button></div>:modal.type === "skill" ? <div className="wb-stack"><p className="wb-muted" title={skillOrigin(modal)}>{skillOrigin(modal,true)}</p><pre>{modal.content || modal.instructions || "没有可显示正文"}</pre></div> : modal.type === "resource" ? <div className="wb-stack">
+      </form>:modal.type==='system-add'?<div className="wb-stack"><Button primary disabled={busy} onClick={()=>edit()}><Icon name="plus" size={16}/>创建空白体系</Button><label className="wb-button"><Icon name="file" size={16}/>导入体系包<input type="file" accept="application/json,.json" disabled={busy} hidden onChange={event=>{const file=event.target.files[0];event.target.value='';if(file)importPackage(file);}}/></label></div>:modal.type==='library-tools'?<div className="wb-stack">{kind==='skills'&&<label>配置项目技能<select aria-label="配置技能的项目" value={projectId} disabled={busy} onChange={event=>setProjectId(event.target.value)}><option value="">选择项目</option>{(library.projects||[]).filter(item=>!item.deletedAt&&!item.archived).map(item=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}{kind==='skills'&&<Button disabled={busy} onClick={()=>{setShowHidden(value=>!value);setModal(null);}}><Icon name={showHidden?'eye':'eye-off'} size={16}/>{showHidden?'返回可见技能':`查看隐藏技能（${hiddenSkills.length}）`}</Button>}<Button disabled={busy} onClick={()=>work(async()=>{await refreshData();setModal(null);})}><Icon name="refresh" size={16}/>刷新</Button>{kind==='systems'&&drafts.current.size>0&&<><p className="wb-muted">已保留 {drafts.current.size} 份未保存版本草稿，仅在本次工作台中保留。</p>{[...drafts.current.values()].map(form=><Button key={systemVersionDraftKey(form)} disabled={busy} onClick={()=>restoreDraft(form)}>{form.name||'未命名体系'} · v{form.editingVersion||'新版本'} · 继续编辑</Button>)}</>}</div>:modal.type==='system-actions'?<div className="wb-stack"><Button disabled={busy} onClick={()=>work(async()=>{const result=await api('system.export',{systemId:modal.system.id});await downloadValue({content:JSON.stringify(result.system,null,2),name:result.filename,mimeType:result.mimeType});setModal(null);})}>导出体系包</Button><Button disabled={busy} onClick={()=>work(async()=>{await api('system.copy',{systemId:modal.system.id,name:modal.system.name+' 副本'});await refreshData();await onRefresh();setModal(null);})}>复制体系</Button></div>:modal.type === "skill" ? <div className="wb-stack"><p className="wb-muted" title={skillOrigin(modal)}>{skillOrigin(modal,true)}</p><pre>{modal.content || modal.instructions || "没有可显示正文"}</pre></div> : modal.type === "resource" ? <div className="wb-stack">
         <p className="wb-muted">{modal.editing ? '正在编辑本地文本草稿。应用到版本表单后仍需保存新版本；旧版本资源保持不变。' : '固定版本资源只读。通过明确编辑或在版本表单替换文件，准备下一版本。'}</p>
         {!modal.editing && isTextSystemResource(modal.tab) && <Button onClick={() => setModal(current => ({ ...current, editing: true, draftText: current.previous.resourceDrafts?.[current.tab.path]?.content ?? current.originalText }))}>{modal.previous.resourceDrafts?.[modal.tab.path] ? '继续编辑保留的文本草稿' : '编辑文本草稿'}</Button>}
         {modal.editing ? <><label>文本草稿<textarea aria-label="体系资源文本草稿" rows={24} style={{ width: '100%', fontFamily: 'monospace' }} value={modal.draftText} onChange={event => update('draftText', event.target.value)} /></label><div className="wb-row"><Button primary onClick={() => setModal(resourceParent(modal, 'apply'))}>应用到版本表单（未保存）</Button><Button onClick={leaveResource}>返回版本表单…</Button></div></> : <><div style={{ height: "65vh", display: "flex" }}><ResourceView key={modal.tab.path} tab={modal.tab} api={api} onOpenFile={(file) => {

@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import vm from 'node:vm';
-import { BrowserEngine, createCliRunner, parseMhtml, cssResourceUrls, parseCliOutput, wrapCliScript, waitForCaptureAssets, BROWSER_RESULT_MARKER } from './browser-engine.js';
+import {createHash} from 'node:crypto';
+import {collectRemoteResources,buildAssetBundle} from './asset-archive.js';
+import { BrowserEngine, createCliRunner, parseMhtml, restoreMhtmlReferences, cssResourceUrls, parseCliOutput, wrapCliScript, waitForCaptureAssets, BROWSER_RESULT_MARKER } from './browser-engine.js';
 
 function fakeEngine(extra = {}) {
   const calls = [];
@@ -45,6 +47,30 @@ test('existing-space control errors propagate without creating or switching spac
   assert.equal(calls.length,1);assert.match(calls[0],/taskSpace\(123\)/);assert.equal(engine.spaceId,null);
 });
 
+test('opening recovers an expired engine-owned space while invalidating its old browser handles',async()=>{
+  const {engine,calls}=fakeEngine(),runner=engine.runner;
+  const old=await engine.open({projectId:'p',url:'https://example.com'});
+  engine.runner=async source=>{
+    if(source.includes('value:{spaceId:')&&source.includes('taskSpace(123)'))throw Error('task space not found: 123');
+    return runner(source);
+  };
+  const next=await engine.open({projectId:'p',url:'https://example.org'});
+  assert.notEqual(next.browserId,old.browserId);
+  assert.equal(engine.info(old.browserId),null);
+  assert.equal(engine.info(next.browserId).projectId,'p');
+  assert.ok(calls.some(source=>/taskSpace\("Designer /.test(source)));
+});
+
+test('an expired explicitly retained space never falls back to another space',async()=>{
+  const {engine}=fakeEngine();
+  await engine.open({projectId:'p',url:'https://example.com',spaceId:123});
+  let calls=0;
+  engine.runner=async()=>{calls++;throw Error('task space not found: 123');};
+  await assert.rejects(engine.open({projectId:'p',url:'https://example.org'}),/task space not found/);
+  assert.equal(calls,1);
+  assert.equal(engine.spaceId,123);
+});
+
 test('invalid inputs and cross-project actions never reach the CLI', async () => {
   const {engine,calls}=fakeEngine();
   for(const url of ['file:///etc/passwd','javascript:alert(1)','https://user:password@example.com','broken']) await assert.rejects(engine.open({projectId:'p',url}),{code:'INVALID_URL'});
@@ -71,6 +97,30 @@ test('MHTML parses folded headers, quoted-printable CSS and binary assets',()=>{
   const archive='MIME-Version: 1.0\r\nContent-Type: multipart/related;\r\n\tboundary="test-boundary"\r\n\r\n--test-boundary\r\nContent-Type: text/css; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\nContent-Location: https://example.com/style.css\r\n\r\nbody {color:=\r\n=23fff;}\r\n--test-boundary\r\nContent-Type: font/woff2\r\nContent-Transfer-Encoding: base64\r\nContent-Location: https://example.com/font.woff2\r\n\r\nAAECA/8=\r\n--test-boundary\r\nContent-Type: text/html\r\nContent-Location: https://example.com/\r\n\r\n<script>evil</script>\r\n--test-boundary--\r\n';
   const resources=parseMhtml(archive);assert.equal(resources.length,2);assert.equal(resources[0].category,'stylesheet');assert.equal(Buffer.from(resources[0].bytesBase64,'base64').toString(),'body {color:#fff;}');assert.deepEqual(Buffer.from(resources[1].bytesBase64,'base64'),Buffer.from([0,1,2,3,255]));assert.equal(resources[1].category,'font');
   assert.equal(parseMhtml(archive,{maxResourceBytes:2,maxTotalBytes:10}).length,0);assert.deepEqual(parseMhtml('not mhtml'),[]);
+});
+
+function cidArchive(suffix='one',reverse=false){const parts=[['cid:css-'+suffix+'@mhtml.blink','text/css','@import "cid:nested-'+suffix+'@mhtml.blink";@font-face{src:url("fonts/jp.ttf")}'],['cid:nested-'+suffix+'@mhtml.blink','text/css','body{color:#123}'],['https://example.test/pages/fonts/jp.ttf','font/ttf',Buffer.from([0,1,0,0,0,1,2])]];if(reverse)parts.reverse();return 'Content-Type: multipart/related; boundary="cid-test"\r\n\r\n'+parts.map(([url,mime,bytes])=>'--cid-test\r\nContent-Location: '+url+'\r\n'+(/^cid:/.test(url)?'Content-ID: <'+url.slice(4)+'>\r\n':'')+'Content-Type: '+mime+'\r\nContent-Transfer-Encoding: base64\r\n\r\n'+Buffer.from(bytes).toString('base64')+'\r\n').join('')+'--cid-test--\r\n';}
+
+test('MHTML CID styles resolve only captured parts with stable content hashes and original document base',()=>{
+  const aliases=new Map(),failures=[],first=parseMhtml(cidArchive(),{sourceUrl:'https://example.test/pages/view.html',onAlias:(id,url)=>aliases.set(id,url),onFailure:value=>failures.push(value)}),second=parseMhtml(cidArchive('different',true),{sourceUrl:'https://example.test/pages/view.html',onFailure:value=>failures.push(value)});
+  assert.deepEqual(failures,[]);assert.deepEqual(first.map(resource=>resource.url).sort(),second.map(resource=>resource.url).sort());
+  for(const resource of first.filter(resource=>resource.mimeType==='text/css')){const bytes=Buffer.from(resource.bytesBase64,'base64');assert.ok(resource.url.endsWith(createHash('sha256').update(bytes).digest('hex')+'.css'));assert.ok(!bytes.toString().includes('cid:'));}
+  assert.ok(first.some(resource=>Buffer.from(resource.bytesBase64,'base64').toString().includes('https://example.test/pages/fonts/jp.ttf')));
+  const html=restoreMhtmlReferences('<html><head><link rel="stylesheet" href="cid:css-one@mhtml.blink"></head><body style="background:url(cid:nested-one@mhtml.blink)"></body></html>',aliases,value=>failures.push(value));assert.ok(!html.includes('cid:'));assert.ok(html.includes(aliases.get('cid:css-one@mhtml.blink')));assert.deepEqual(failures,[]);
+  const missing=[];const unknown=restoreMhtmlReferences('<img src="cid:absent@mhtml.blink">',aliases,value=>missing.push(value));assert.ok(unknown.includes('about:blank#snapshot-resource-unavailable'));assert.equal(missing[0].code,'MHTML_CID_MISSING');
+  const limited=[],limitedAliases=[];parseMhtml(cidArchive(),{sourceUrl:'https://example.test/pages/view.html',maxResourceBytes:1,onAlias:(...args)=>limitedAliases.push(args),onFailure:value=>limited.push(value)});assert.equal(limitedAliases.length,0);assert.ok(limited.some(value=>value.code==='RESOURCE_LIMIT'));
+});
+
+test('capture and archive reconstruct CID stylesheet dependencies without issuing any CID or synthetic network fetch',async()=>{
+  const {engine,calls}=fakeEngine(),runner=engine.runner;engine.runner=async(source,options)=>source.includes('Page.captureSnapshot')?(calls.push(source),{html:'<!doctype html><html><head><link rel="stylesheet" href="cid:css-one@mhtml.blink"></head><body>Frozen</body></html>',resourceUrls:['cid:css-one@mhtml.blink'],mhtml:cidArchive(),warnings:[],width:900,height:700,url:'https://example.test/pages/view.html',baseURL:'https://example.test/pages/view.html',responses:[]}):runner(source,options);
+  const page=await engine.open({projectId:'p',url:'https://example.test/pages/view.html'}),before=calls.length,captured=await engine.capture({browserId:page.browserId,projectId:'p'});assert.equal(calls.length,before+1);assert.deepEqual(captured.failures,[]);assert.equal(captured.resources.length,3);assert.ok(!captured.html.includes('cid:'));
+  let fetches=0;const collected=await collectRemoteResources(captured.resources,{sourceUrl:captured.url,fetch:async()=>{fetches++;throw Error('all CID and font bytes are already captured')}});assert.deepEqual(collected.failures,[]);assert.equal(fetches,0);const bundle=buildAssetBundle({importId:'i-cid-test',html:captured.html,source:{kind:'website',url:captured.url},resources:collected.resources});assert.equal(bundle.record.integrity,'complete');assert.equal(bundle.record.resourceSummary.styles.count,2);assert.equal(bundle.record.resourceSummary.fonts.count,1);assert.ok(!bundle.html.includes('cid:'));await engine.dispose();
+});
+
+test('MHTML rejects conflicting or unresolvable internal references without enabling the CID protocol',()=>{
+  const failures=[],aliases=new Map(),data='Content-Type: multipart/related; boundary="b"\r\n\r\n'+[['https://example.test/a.css','a{}'],['https://example.test/b.css','b{}']].map(([url,body])=>'--b\r\nContent-Type: text/css\r\nContent-Location: '+url+'\r\nContent-ID: <same@mhtml.blink>\r\n\r\n'+body+'\r\n').join('')+'--b--\r\n';parseMhtml(data,{sourceUrl:'https://example.test/',onFailure:value=>failures.push(value),onAlias:(id,url)=>aliases.set(id,url)});assert.ok(failures.some(value=>value.code==='MHTML_CID_CONFLICT'));assert.equal(aliases.has('cid:same@mhtml.blink'),false);
+  const missing=[];parseMhtml(cidArchive().replace(Buffer.from('@import "cid:nested-one@mhtml.blink";@font-face{src:url("fonts/jp.ttf")}').toString('base64'),Buffer.from('@import "cid:missing@mhtml.blink";').toString('base64')),{sourceUrl:'https://example.test/',onFailure:value=>missing.push(value)});assert.ok(missing.some(value=>value.code==='MHTML_CID_MISSING'));
+  const deep=[],chain='Content-Type: multipart/related; boundary="chain"\r\n\r\n'+Array.from({length:120},(_,index)=>'--chain\r\nContent-Type: text/css\r\nContent-Location: cid:style-'+index+'@mhtml.blink\r\n\r\n'+(index<119?'@import "cid:style-'+(index+1)+'@mhtml.blink";':'body{}')+'\r\n').join('')+'--chain--\r\n';parseMhtml(chain,{sourceUrl:'https://example.test/',onFailure:value=>deep.push(value)});assert.ok(deep.some(value=>value.code==='MHTML_CID_DEPTH'));
 });
 
 test('source readiness waits boundedly for fonts and non-lazy images without DOM writes or scrolling',async()=>{

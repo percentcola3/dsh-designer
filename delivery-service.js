@@ -90,7 +90,7 @@ function deliveryHelp(action){
     'git.pull':{description:'Pull a configured remote with fast-forward only (user).',fields:{...source,remote:'optional configured remote name, default origin',branch:'optional named branch, default current branch',expectedHead:'optional expected HEAD commit; mismatch rejects'},userOnly:true,returns:'success, stdout, stderr, status, sourceId',constraints:['Requires saved/discarded project drafts and a clean conflict-free repository; does not rebase or resolve conflicts.']},
     'git.push':{description:'Push HEAD to a configured remote branch (user).',fields:{...source,remote:'optional configured remote name, default origin',branch:'optional destination branch, default current branch',expectedHead:'optional expected HEAD commit; mismatch rejects'},userOnly:true,returns:'success, stdout, stderr, status, sourceId',constraints:['Requires saved/discarded project drafts and no existing conflicts; does not create commits or force push.']},
     'git.checkout':{description:'Switch or create a source branch (user).',fields:{...source,branch:'required valid local branch or remote-tracking branch name',create:'optional boolean, default false; true creates a local branch',expectedHead:'optional expected HEAD commit; mismatch rejects'},userOnly:true,returns:'success, stdout, stderr, status, sourceId',constraints:['Requires saved/discarded project drafts and a clean conflict-free repository; remote-tracking names switch/create their local tracking branch.']},
-    'export.create':{description:'Export saved pages with their local dependencies.',fields:exportFields,returns:'export record, manifest including capture receipt for images, project, projectRevision',constraints:['Requires write permission. Saves no unsaved draft. Selected content must fit 100 pages, 4000 files, 32 MiB per file and 128 MiB total static content. Missing/remote dependencies fail; image formats need the browser capture adapter.']},
+    'export.create':{description:'Export saved pages with their local dependencies.',fields:{...exportFields,captures:'optional 1–24 image requests sharing the selected page and format; each may override scene, sceneId, nodeIds, viewport, region, quality, fullPage, background or editorMarks. Saved sequentially in one call. Returns complete, captures and projectRevision; an incomplete batch includes failedIndex and error. Retry the remaining requests with the returned current revision.'},returns:'single export record and manifest, or bounded batch capture receipts, projectRevision',constraints:['Requires write permission. Saves no unsaved draft. Selected content must fit 100 pages, 4000 files, 32 MiB per file and 128 MiB total static content. Missing/remote dependencies fail; image formats need the browser capture adapter.']},
     'export.list':{description:'List recorded versioned exports.',fields:project,returns:'exports[], projectRevision'},
     'export.get':{description:'Read one export record and its verified manifest.',fields:{...project,exportId:'required recorded e- export ID'},returns:'export, manifest, projectRevision'},
     'share.create':{description:'Create a versioned local preview link (user).',fields:{...exportFields,exportId:'optional existing export ID; omitted creates a saved-page export using the selection/format fields',scope:'required owner, local-link or unlisted',hosting:'optional local (default); external fails until a publisher is configured'},userOnly:true,returns:'share with owner-visible URL, project, projectRevision',constraints:['Requires explicit access scope and current project CAS. Frozen files form the read-only allowlist; external deployment is not connected.']},
@@ -217,6 +217,7 @@ export class DeliveryService {
     const add=(logical,bytes,mimeType,publicFile=true)=>{relative(logical);const existing=files.get(logical);if(existing){if(hash(existing.bytes)!==hash(bytes))fail('EXPORT_PATH_COLLISION','Export files share a path with different bytes',{path:logical});return}total+=bytes.length;if(total>MAX_PACKAGE||files.size>=4000||bytes.length>MAX_FILE)fail('EXPORT_LIMIT','Export content exceeds package limits');files.set(logical,{path:logical,bytes,mimeType,public:publicFile})};
     const pagePaths=new Set(selected.pages.map(p=>relative(p.htmlPath)));
     const resolve=(value,from,navigation=false)=>{
+      if(!navigation&&/^about:blank#asset-(?:unavailable|cycle)$/.test(value))return 'data:,';
       if(!value||/^(?:#|data:|mailto:|tel:)/i.test(value))return value;
       if(/^[a-z][a-z0-9+.-]*:/i.test(value)||value.startsWith('//')){if(navigation&&/^https?:\/\//i.test(value))return value;fail('EXPORT_REMOTE_RESOURCE','Archive every remote asset before exporting',{url:redact(value),from})}
       const match=/^([^?#]*)([?#][\s\S]*)?$/.exec(value),pathname=decodeURIComponent(match[1]),suffix=match[2]||'';
@@ -252,12 +253,51 @@ export class DeliveryService {
   async exportManifest(project,record,signal) {const saved=await this.store.read(`projects/${project.id}/${record.manifestPath}`,signal);if(hash(saved.content)!==record.manifestHash)fail('INTEGRITY_MISMATCH','Export manifest changed');const manifest=JSON.parse(saved.content);if(manifest.exportId!==record.id||!Array.isArray(manifest.files))fail('INVALID_EXPORT','Export manifest identity is invalid');return manifest;}
   exportView(projectId,record) {return {...record,downloadUrl:`${this.origin()}/api/designer/download/${projectId}/${record.id}`};}
   origin() {return httpURL(this.ctx.webServer.getOrigin()).replace(/\/$/,'');}
+  async captureBatch(input,project,context) {
+    const {captures, ...base} = input;
+    const imageOptions = new Set(['scene','sceneId','nodeIds','viewport','region','quality','fullPage','background','editorMarks']);
+    if (!['png','jpeg','webp'].includes(base.format) || !Array.isArray(captures) || !captures.length || captures.length > 24) {
+      fail('INVALID_CAPTURE_BATCH','Supply 1–24 capture requests and an image format');
+    }
+    for (const request of captures) {
+      if (!request || typeof request !== 'object' || Array.isArray(request) || Object.keys(request).some(key => !imageOptions.has(key))) {
+        fail('INVALID_CAPTURE_BATCH','Each capture may override image options only');
+      }
+    }
+    if ((this.records(project).exports?.length || 0) + captures.length > 100) fail('LIMIT_REACHED','A project supports 100 recorded exports');
+    let projectRevision = project.revision;
+    const results = [];
+    for (const [index, capture] of captures.entries()) {
+      signalCheck(context.signal);
+      try {
+        const ownScene = Object.hasOwn(capture,'scene') || Object.hasOwn(capture,'sceneId');
+        const scene = ownScene ? capture.scene ?? capture.sceneId ?? null : base.scene ?? base.sceneId ?? null;
+        let request = {...base, ...capture, scene, sceneId:scene, expectedRevision:projectRevision};
+        let effectiveContext = context;
+        if (context.agent) {
+          const authority = await this.owner.aiWorkbench.authorizeAction(request,context);
+          request = authority.input || request;
+          effectiveContext = {...context,policy:authority.policy || context.policy};
+        }
+        const saved = await this.exports(request,effectiveContext);
+        projectRevision = saved.projectRevision;
+        results.push({index,scene,
+          export:saved.export,capture:saved.manifest.capture,warnings:saved.manifest.warnings});
+      } catch (error) {
+        signalCheck(context.signal);
+        return {complete:false,captures:results,failedIndex:index,projectRevision:error.details?.currentRevision ?? projectRevision,
+          error:{code:error.code || 'CAPTURE_FAILED',message:redact(error.message),details:redactDetails(error.details)}};
+      }
+    }
+    return {complete:true,captures:results,projectRevision};
+  }
   async exports(input,context) {
     const project=await this.project(input.projectId,context.signal),action=input.action.slice(7);
     if(action==='list')return {exports:(this.records(project).exports||[]).map(record=>this.exportView(project.id,record)),projectRevision:project.revision};
     if(action==='get'){const record=this.exportRecord(project,input);return {export:this.exportView(project.id,record),manifest:await this.exportManifest(project,record,context.signal),projectRevision:project.revision}}
     if(action!=='create')fail('UNKNOWN_ACTION','Unknown export action');if(input.expectedRevision!==project.revision)fail('VERSION_CONFLICT','Project changed before export',{currentRevision:project.revision});
     const format=input.format||'zip';if(!['zip','design-package','png','jpeg','webp'].includes(format))fail('INVALID_FORMAT','Choose ZIP, design package, PNG, JPEG or WebP');
+    if(input.captures!==undefined)return this.captureBatch({...input,format},project,context);
     const snapshot=await this.snapshot(project,{...input,format},context),exportId=uid('e'),folder=`delivery/${exportId}`;let artifact,mimeType,extension,captureReceipt;
     if(['png','jpeg','webp'].includes(format)){
       if(snapshot.pages.length!==1)fail('IMAGE_PAGE_SELECTION','Choose exactly one page for an image export');if(typeof this.owner.imageCapture!=='function')fail('CAPTURE_UNAVAILABLE','The browser image capture adapter is unavailable');
@@ -277,6 +317,7 @@ export class DeliveryService {
   }
   shareView(projectId,record,user) {const {capability,...publicRecord}=record;return {...publicRecord,...(user?{url:record.externalUrl||`${this.origin()}/api/designer/share/${projectId}/${record.id}/${capability}/`}:{})};}
   async shares(input,context) {
+    if(input.captures!==undefined)fail('INVALID_INPUT','Batch captures use export.create');
     let project=await this.project(input.projectId,context.signal);const action=input.action.slice(6);
     if(action==='list')return {shares:(this.records(project).shares||[]).map(record=>this.shareView(project.id,record,context.user===true&&!context.agent)),projectRevision:project.revision};
     userOnly(context);

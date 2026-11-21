@@ -24,6 +24,8 @@ export default `
   font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',sans-serif;
   font-size:13px;line-height:1.5;isolation:isolate;-webkit-font-smoothing:antialiased;
 }
+/* macOS window controls share the topbar; their inset is reserved inline. */
+html[data-platform=darwin] .wb{padding-top:0}
 .wb *{box-sizing:border-box}
 .wb button,.wb input,.wb select,.wb textarea{font:inherit;color:inherit}
 .wb button{cursor:pointer}
@@ -47,16 +49,16 @@ export default `
 .wb-grow{flex:1;min-width:0}
 .wb-muted{color:var(--wb-muted);font-size:12px}
 .wb-ellipsis{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.wb .wb-button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:34px;flex-shrink:0;border:1px solid var(--wb-border);background:var(--wb-bg);color:var(--wb-text);border-radius:8px;padding:6px 11px;white-space:nowrap;font-weight:500;line-height:20px;transition:background-color .15s,border-color .15s,color .15s}
+.wb .wb-button{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-height:var(--wb-control-height,28px);flex-shrink:0;border:1px solid var(--wb-border);background:var(--wb-bg);color:var(--wb-text);border-radius:8px;padding:3px 9px;white-space:nowrap;font-size:12px;font-weight:500;line-height:20px;transition:background-color .15s,border-color .15s,color .15s}
 .wb .wb-button:not(:disabled):hover{background:var(--wb-soft);border-color:var(--wb-border-strong)}
 .wb .wb-button[aria-pressed=true]{background:var(--wb-soft);color:var(--wb-accent);border-color:transparent}
 /* More specific than the generic .wb button color reset, including hover/focus. */
-.wb .wb-button.wb-primary{background:var(--wb-primary);color:var(--wb-on-primary);border-color:transparent;font-weight:600;padding-inline:14px}
+.wb .wb-button.wb-primary{background:var(--wb-primary);color:var(--wb-on-primary);border-color:transparent;font-weight:600;padding-inline:11px}
 .wb .wb-button.wb-primary:not(:disabled):hover{background:var(--wb-primary-hover);color:var(--wb-on-primary)}
 .wb .wb-button.wb-primary:not(:disabled):active{filter:brightness(.94)}
 .wb .wb-button.wb-ghost{background:transparent;border-color:transparent;color:var(--wb-muted);box-shadow:none}
 .wb .wb-button.wb-ghost:not(:disabled):hover{background:var(--wb-soft);color:var(--wb-text)}
-.wb .wb-icon-button{width:32px;min-height:32px;padding:6px}
+.wb .wb-icon-button{width:var(--wb-control-height,28px);min-height:var(--wb-control-height,28px);padding:5px}
 .wb svg{flex-shrink:0;vertical-align:middle}
 .wb .plant-logo{display:inline-block;flex-shrink:0;border-radius:23%;vertical-align:middle;overflow:hidden}
 .wb-chip{display:inline-flex;align-items:center;gap:4px;background:var(--wb-soft);border:1px solid var(--wb-border);border-radius:6px;padding:2px 7px;font-size:11px;max-width:100%}
@@ -110,7 +112,7 @@ export default `
 .wb-empty-brand{display:grid;place-items:center;width:80px;height:80px;margin-bottom:5px;border:1px solid var(--wb-border);border-radius:22px;background:var(--wb-elevated);box-shadow:var(--wb-shadow)}
 .wb-manager-empty h2{font-size:22px;font-weight:600;letter-spacing:-.035em}
 .wb-manager-empty p{max-width:370px;font-size:13px;line-height:1.85;color:var(--wb-muted);text-wrap:balance}
-.wb-manager-empty>.wb-button{margin-top:4px;min-height:38px;padding-inline:18px}
+.wb-manager-empty>.wb-button{margin-top:4px;min-height:var(--wb-control-height,28px);padding-inline:12px}
 .wb-empty-steps{display:flex;align-items:center;gap:22px;margin-top:15px;color:var(--wb-faint);font-size:11px}
 .wb-empty-steps>span{display:flex;align-items:center;gap:6px}
 .wb .ec{--ec-bg:var(--wb-canvas);--ec-panel:var(--wb-bg);--ec-soft:var(--wb-soft);--ec-text:var(--wb-text);--ec-muted:var(--wb-muted);--ec-border:var(--wb-border);--ec-brand:var(--wb-accent)}
@@ -129,7 +131,7 @@ export default `
 .wb-resizer{position:absolute;right:-3px;top:0;bottom:0;width:6px;cursor:col-resize;z-index:8}
 .wb-resizer:hover{background:var(--wb-accent)}
 .wb-content{display:flex;flex-direction:column;min-width:0;flex:1;min-height:0;overflow:hidden}
-.wb-content-tabs{display:flex;align-items:stretch;flex-shrink:0;min-height:37px;background:var(--wb-panel);border-bottom:1px solid var(--wb-border)}
+.wb-content-tabs{display:flex;align-items:stretch;flex-shrink:0;min-height:32px;background:var(--wb-panel);border-bottom:1px solid var(--wb-border)}
 .wb-tab-scroll{display:flex;flex:1;overflow:auto;scrollbar-width:thin}
 .wb-content-tab{display:flex;align-items:center;gap:3px;border-right:1px solid var(--wb-border);border-bottom:2px solid transparent;min-width:90px;max-width:260px;padding:0 5px 0 9px;flex-shrink:0}
 .wb-content-tab[aria-selected=true]{background:var(--wb-bg);border-bottom-color:var(--wb-accent)}
@@ -272,4 +274,5 @@ export default `
 @media(prefers-reduced-motion:reduce){
   .wb .wb-button,.wb .wb-group,.wb-card{transition:none}
 }
+.wb-source-panel .wb-stack>.wb-button{align-self:flex-start;max-width:100%}
 `;

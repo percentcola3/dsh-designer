@@ -10,9 +10,9 @@ export default `
 .wb-projects-search:focus-within{box-shadow:inset 0 0 0 1px var(--wb-faint)}
 .wb-projects-search>button{display:grid;place-items:center;border:0;background:transparent;padding:4px;color:var(--wb-muted);border-radius:var(--wb-radius-sm,8px)}
 .wb-projects-groups{display:flex;align-items:center;flex-wrap:wrap;gap:6px}
-.wb-projects-groups>button{display:inline-flex;align-items:center;gap:5px;max-width:100%;min-height:32px;padding:6px 11px;border:0;border-radius:var(--wb-radius-sm,8px);background:transparent;color:var(--wb-muted);font:inherit;font-size:12px;overflow-wrap:anywhere}
-.wb-projects-groups>button:hover{background:var(--wb-hover);color:var(--wb-text)}
-.wb-projects-groups>button[aria-pressed=true]{background:var(--wb-brand-soft);color:var(--wb-brand-ink);font-weight:550}
+.wb.wb-v2 .wb-projects-groups>button{display:inline-flex;align-items:center;gap:5px;max-width:100%;min-height:32px;padding:6px 11px;border:0;border-radius:var(--wb-radius-sm,8px);background:transparent;background-image:none;box-shadow:none;color:var(--wb-muted);font:inherit;font-size:12px;overflow-wrap:anywhere}
+.wb.wb-v2 .wb-projects-groups>button:hover{background:var(--wb-hover);color:var(--wb-text)}
+.wb.wb-v2 .wb-projects-groups>button[aria-pressed=true]{background:var(--wb-brand-soft);background-image:none;color:var(--wb-brand-ink);box-shadow:none;font-weight:550}
 .wb-projects-groups>.wb-projects-add-group{color:var(--wb-faint)}
 .wb-projects-groups>.wb-projects-group-settings{padding:6px 8px}
 .wb-projects-create{display:flex;align-items:center;flex-wrap:wrap;gap:9px;padding:14px;background:var(--wb-panel);border:0;border-radius:var(--wb-radius,12px);box-shadow:var(--wb-shadow-soft)}
@@ -32,4 +32,6 @@ export default `
  .wb-projects-create>select{flex:1;min-width:100px}
  .wb-projects-grid{gap:12px}
 }
+.wb-project-recovery{display:flex;flex-direction:column;align-items:flex-start;gap:12px;padding:22px;border:1px solid var(--wb-divider);border-radius:var(--wb-radius,12px);background:var(--wb-panel)}
+.wb-project-recovery h3,.wb-project-recovery p{margin:0;overflow-wrap:anywhere}
 `;

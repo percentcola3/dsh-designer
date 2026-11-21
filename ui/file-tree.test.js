@@ -6,6 +6,18 @@ const fileNodes = tree => flattenFileTree(tree).filter(node => node.kind === 'fi
 const paths = tree => fileNodes(tree).map(node => node.path);
 const atPath = (tree, path, sourceId = '') => flattenFileTree(tree).find(node => node.path === path && node.sourceId === sourceId);
 
+test('Git metadata stays hidden in local and nested source trees', () => {
+  const tree = createFileTree([
+    {path: '.git/config'}, {path: '.gitignore'}, {path: '.gitattributes'},
+    {path: '.github/workflows/check.yml'}, {path: 'designs/web/index.html'},
+    {name: 'src', type: 'directory', sourceId: 'external', children: [
+      {name: '.git', type: 'directory', children: [{name: 'HEAD'}]},
+      {name: '.gitmodules'}, {name: 'app.js'},
+    ]},
+  ]);
+  assert.deepEqual(paths(tree), ['designs/web/index.html', 'src/app.js']);
+});
+
 test('canonical hierarchy is deterministic for flat actual entries and nested DTOs, preserving resource roles', () => {
   const flat = [
     {id: 'logo', path: 'assets/logo.svg', type: 'asset', entryType: 'file', readonly: true},

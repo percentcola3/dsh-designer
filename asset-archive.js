@@ -2,6 +2,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { lookup } from 'node:dns/promises';
+import {parseFragment,serializeOuter} from 'parse5';
 
 const CATEGORIES = new Set(['images', 'fonts', 'styles', 'media']);
 const MIME_EXT = { 'text/css':'css', 'image/png':'png', 'image/jpeg':'jpg', 'image/gif':'gif', 'image/webp':'webp', 'image/svg+xml':'svg', 'image/avif':'avif', 'image/x-icon':'ico', 'font/woff2':'woff2', 'font/woff':'woff', 'font/ttf':'ttf', 'font/otf':'otf', 'application/font-woff':'woff', 'application/vnd.ms-fontobject':'eot', 'audio/mpeg':'mp3', 'audio/ogg':'ogg', 'audio/wav':'wav', 'video/mp4':'mp4', 'video/webm':'webm', 'application/octet-stream':'bin' };
@@ -18,7 +19,7 @@ function ident(value, prefix) {
   return value;
 }
 function decode64(value) {
-  if (typeof value !== 'string' || value.length > Math.ceil(MAX_TOTAL / 3) * 4 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) throw error('INVALID_BASE64', 'Asset bytes must use canonical base64');
+  if (typeof value !== 'string' || value.length > Math.ceil(MAX_TOTAL / 3) * 4 || value.length % 4 !== 0 || /[^A-Za-z0-9+/=]/.test(value)) throw error('INVALID_BASE64', 'Asset bytes must use canonical base64');
   const bytes = Buffer.from(value, 'base64');
   if (bytes.toString('base64') !== value) throw error('INVALID_BASE64', 'Asset base64 is not canonical');
   return bytes;
@@ -50,6 +51,15 @@ function cleanMetadata(value, depth = 0) {
 function failure(value, fallback = 'DOWNLOAD_FAILED') {
   return { url:safeURL(value?.url || ''), code:String(value?.code || fallback).slice(0,100), message:String(value?.message || 'Resource unavailable').slice(0,1000) };
 }
+const rasterMimes = new Set(['image/png','image/jpeg','image/gif','image/webp']);
+const pngSignature = Buffer.from([137,80,78,71,13,10,26,10]);
+function rasterMime(bytes) {
+  if (bytes.subarray(0,8).equals(pngSignature)) return 'image/png';
+  if (bytes[0]===255 && bytes[1]===216 && bytes[2]===255) return 'image/jpeg';
+  if (/^GIF8[79]a/.test(bytes.subarray(0,6).toString('latin1'))) return 'image/gif';
+  if (bytes.toString('latin1',0,4)==='RIFF' && bytes.toString('latin1',8,12)==='WEBP') return 'image/webp';
+  return null;
+}
 function mimeOf(value, url = '', bytes) {
   let mime = String(value || '').split(';')[0].trim().toLowerCase();
   mime = ({'application/x-font-ttf':'font/ttf','application/x-font-truetype':'font/ttf','application/x-font-otf':'font/otf','application/x-font-opentype':'font/otf','application/x-font-woff':'font/woff','application/font-woff2':'font/woff2','application/woff2':'font/woff2'})[mime] || mime;
@@ -60,6 +70,7 @@ function mimeOf(value, url = '', bytes) {
   if (!mime || mime === 'application/octet-stream') {
     try { const ext = path.posix.extname(new URL(url).pathname).slice(1).toLowerCase(); mime = EXT_MIME[ext] || mime; } catch { /* no extension */ }
   }
+  if (bytes && (rasterMimes.has(mime) || !mime || mime === 'application/octet-stream')) mime = rasterMime(bytes) || mime;
   return mime || 'application/octet-stream';
 }
 function categoryOf(mime, category) {
@@ -71,6 +82,30 @@ function categoryOf(mime, category) {
   if (mime.startsWith('audio/') || mime.startsWith('video/')) return 'media';
   return category || 'media';
 }
+const SVG_TAGS=new Set('svg g defs desc title path rect circle ellipse line polyline polygon text tspan textpath use symbol clippath mask pattern marker filter feblend fecolormatrix fecomponenttransfer fecomposite feconvolvematrix fediffuselighting fedisplacementmap fedistantlight fedropshadow feflood fefunca fefuncb fefuncg fefuncr fegaussianblur feimage femerge femergenode femorphology feoffset fepointlight fespecularlighting fespotlight fetile feturbulence lineargradient radialgradient stop style view'.split(' '));
+/** Strip inert export declarations/metadata; reject active or external SVG content. */
+export function sanitizeSVG(bytes){
+  let source=utf8(bytes).replace(/^\uFEFF/,'').replace(/^\s*<\?xml\s+[^?]*\?>\s*/i,'').trimStart();
+  // XML exporters may place an inert generator comment before the standard DTD.
+  while(source.startsWith('<!--')){const end=source.indexOf('-->');if(end<0||source.slice(4,end).includes('--'))throw error('ACTIVE_RESOURCE','SVG has an invalid XML prolog comment');source=source.slice(end+3).trimStart();}
+  source=source.replace(/^\s*<!DOCTYPE\s+svg\s+PUBLIC\s+(["'])-\/\/W3C\/\/DTD SVG 1\.1\/\/EN\1\s+(["'])https?:\/\/www\.w3\.org\/Graphics\/SVG\/1\.1\/DTD\/svg11\.dtd\2\s*>\s*/i,'');
+  const checked=entity(source);
+  if(/<!doctype|<!entity|<\?|<\s*(?:script|foreignobject|iframe|object|embed|animate\w*|set)\b|\bon[a-z]+\s*=|(?:javascript|vbscript)\s*:/i.test(checked))throw error('ACTIVE_RESOURCE','SVG contains active or unsupported markup');
+  const document=parseFragment(source),roots=document.childNodes.filter(node=>node.nodeName!=='#comment'&&!(node.nodeName==='#text'&&!node.value.trim()));
+  if(roots.length!==1||roots[0].tagName!=='svg')throw error('ACTIVE_RESOURCE','SVG must contain one static SVG root');
+  const local=value=>{if(!/^#[^\s"'<>`\\]+$/u.test(value))throw error('ACTIVE_RESOURCE','SVG external references are not archived');return value;};
+  const style=value=>{const decoded=cssUnescape(value.replace(/\/\*[\s\S]*?\*\//g,''));if(/@(?:import|font-face|namespace)\b|expression\s*\(|(?:javascript|vbscript)\s*:|-moz-binding|behavior\s*:/i.test(decoded))throw error('ACTIVE_RESOURCE','SVG styles contain active or external content');transformCSS(decoded,url=>local(url));};
+  const stack=[{node:roots[0],depth:0}];let count=0;
+  while(stack.length){const {node,depth}=stack.pop();if(++count>50000||depth>100)throw error('ACTIVE_RESOURCE','SVG exceeds bounded static structure limits');if(!node.tagName)continue;
+    if(node.namespaceURI!=='http://www.w3.org/2000/svg'||!SVG_TAGS.has(node.tagName.toLowerCase()))throw error('ACTIVE_RESOURCE','SVG contains an unsupported element');
+    node.attrs=node.attrs.filter(attribute=>{const name=(attribute.prefix?attribute.prefix+':':'')+attribute.name;if(/^(?:inkscape:|sodipodi:|xmlns:(?!xlink$))/.test(name))return false;if(/^on/i.test(name)||name==='xml:base'||name==='base')throw error('ACTIVE_RESOURCE','SVG contains an active attribute');if(attribute.name==='href'||attribute.name==='src')local(attribute.value);if(attribute.name==='style')style(attribute.value);else if(/url\s*\(/i.test(cssUnescape(attribute.value)))transformCSS(cssUnescape(attribute.value),url=>local(url));if(name==='xmlns'&&attribute.value!=='http://www.w3.org/2000/svg'||name==='xmlns:xlink'&&attribute.value!=='http://www.w3.org/1999/xlink')throw error('ACTIVE_RESOURCE','SVG contains an unsupported namespace');return true;});
+    node.childNodes=(node.childNodes||[]).filter(child=>child.tagName!=='metadata'&&!/^(?:sodipodi|inkscape):/.test(child.tagName||''));
+    if(node.tagName==='style')for(const child of node.childNodes)if(child.nodeName==='#text')style(child.value);
+    for(const child of node.childNodes)stack.push({node:child,depth:depth+1});
+  }
+  if(!roots[0].attrs.some(attribute=>attribute.name==='xmlns'&&!attribute.prefix))roots[0].attrs.push({name:'xmlns',value:'http://www.w3.org/2000/svg'});
+  return Buffer.from(serializeOuter(roots[0]));
+}
 function validateBytes(bytes, mime) {
   if (bytes.length > MAX_FILE) throw error('ASSET_TOO_LARGE', 'A single resource exceeds 32 MiB');
   const signature = bytes.subarray(0,4).toString('latin1');
@@ -78,14 +113,8 @@ function validateBytes(bytes, mime) {
   if (['font/woff','application/font-woff'].includes(mime) && signature !== 'wOFF') throw error('MIME_MISMATCH', 'WOFF bytes lack the wOFF signature');
   if (mime === 'font/otf' && signature !== 'OTTO') throw error('MIME_MISMATCH', 'OpenType bytes lack the OTTO signature');
   if (mime === 'font/ttf' && ![Buffer.from([0,1,0,0]).toString('latin1'),'true','typ1'].includes(signature)) throw error('MIME_MISMATCH', 'Invalid TrueType signature');
-  if (mime === 'image/png' && !bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) throw error('MIME_MISMATCH','PNG bytes lack the PNG signature');
-  if (mime === 'image/jpeg' && !(bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255)) throw error('MIME_MISMATCH','JPEG bytes lack the JPEG signature');
-  if (mime === 'image/gif' && !/^GIF8[79]a/.test(bytes.subarray(0,6).toString('latin1'))) throw error('MIME_MISMATCH','GIF bytes lack the GIF signature');
-  if (mime === 'image/webp' && !(signature === 'RIFF' && bytes.subarray(8,12).toString('latin1') === 'WEBP')) throw error('MIME_MISMATCH','WebP bytes lack the WebP signature');
-  if (mime === 'image/svg+xml') {
-    const svg = entity(utf8(bytes));
-    if (!/<svg\b/i.test(svg) || /<!doctype|<!entity|<\s*(?:script|foreignobject|iframe|object|embed|animate\w*|set)\b|\bon[a-z]+\s*=|(?:javascript|vbscript)\s*:/i.test(svg)) throw error('ACTIVE_RESOURCE','SVG contains active or unsupported markup');
-  }
+  if (rasterMimes.has(mime) && rasterMime(bytes)!==mime) throw error('MIME_MISMATCH','Image bytes do not match the declared raster format');
+  if (mime === 'image/svg+xml') sanitizeSVG(bytes);
   if (mime === 'text/css') utf8(bytes);
   if (/^(?:text\/html|application\/(?:javascript|x-javascript)|text\/javascript)/.test(mime)) throw error('ACTIVE_RESOURCE', 'Executable resources are not archived');
 }
@@ -119,6 +148,7 @@ function transformCSS(css, transform) {
   return output.replace(/expression\s*\([^;}]*/gi,'').replace(/-moz-binding\s*:[^;}]*/gi,'').replace(/<\/style/gi,'\\3c /style');
 }
 function escapeCSS(value) { return String(value).replace(/\\/g,'\\\\').replace(/"/g,'\\"').replace(/[\r\n\f]/g,' '); }
+export const rewriteCSSResourceUrls=(css,transform)=>transformCSS(css,transform);
 export function cssDependencyUrls(css,base,{allowBlob=false}={}){
   const result=[];
   transformCSS(css,value=>{if(value&&!/^(?:#|data:)/i.test(value)){try{const url=new URL(value,base);if((['http:','https:'].includes(url.protocol)||allowBlob&&url.protocol==='blob:')&&!url.username&&!url.password){url.hash='';result.push(url.href);}}catch{/* Invalid references are reported during archive rewriting. */}}return value;});
@@ -195,6 +225,17 @@ function sanitizeHTML(html, rewrite, base) {
   return output;
 }
 
+// Archived HTML resolves resources relative to html/, while editable pages live in a design folder.
+export function websiteReplicaHTML(capture, destination, paths) {
+  return sanitizeHTML(capture.html, value => {
+    if (!value || /^(?:#|data:)/i.test(value)) return value;
+    const [pathname, fragment] = value.split(/#(.*)/s);
+    const logical = path.posix.normalize(path.posix.join('html', pathname));
+    if (!paths.has(logical)) return 'data:,';
+    return path.posix.relative(path.posix.dirname(destination), paths.get(logical)) + (fragment ? '#' + fragment : '');
+  }, capture.url);
+}
+
 /** Pure, deterministic archive builder. No network, filesystem, timestamps or generated IDs. */
 export function buildAssetBundle({ importId, html = '', resources = [], source, context, preview, warnings = [], failures = [] }) {
   ident(importId,'i');
@@ -231,7 +272,7 @@ export function buildAssetBundle({ importId, html = '', resources = [], source, 
     if (resource.state === 2 || resource.state === 3) return;
     resource.state = 1;
     try {
-      const bytes = resource.mimeType === 'text/css' ? Buffer.from(transformCSS(utf8(resource.original),v => rewrite(v,resource.baseURL,`assets/${importId}/styles/_`))) : resource.original;
+      const bytes = resource.mimeType === 'text/css' ? Buffer.from(transformCSS(utf8(resource.original),v => rewrite(v,resource.baseURL,`assets/${importId}/styles/_`))) : resource.mimeType==='image/svg+xml'?sanitizeSVG(resource.original):resource.original;
       validateBytes(bytes,resource.mimeType);
       resource.path = `assets/${importId}/${resource.category}/${sha(bytes)}-${filename(resource.url,resource.mimeType)}`; resource.state = 2;
       if (!files.some(f => f.path === resource.path)) files.push(fileEntry(resource.path,bytes,resource.mimeType));

@@ -12,6 +12,7 @@ function ShellIcon({ icon, fallback = 'grid', size = 18 }) {
 
 /** Presentation only: the caller owns navigation, tab lifetime, and save guards. */
 export default function WorkbenchShell({
+  pluginVersion,
   navigation = [],
   activeNavigationId,
   onNavigate,
@@ -150,13 +151,13 @@ export default function WorkbenchShell({
     const active = item.id === activeNavigationId
     return <button key={item.id} type="button" className="wb-shell-nav-item"
       aria-current={active ? 'page' : undefined} aria-label={item.label} title={item.label}
-      onClick={() => onNavigate?.(item.id)}><ShellIcon icon={item.icon}/></button>
+      onClick={() => onNavigate?.(item.id)}><ShellIcon icon={item.icon} size={20}/></button>
   }
 
   return (
     <div className="wb-shell" data-sidebar-visible={sidebarVisible}>
       <style>{shellStyles}</style>
-      <header ref={headerRef} className="wb-shell-topbar">
+      <header ref={headerRef} className="wb-shell-topbar" data-window-drag>
         <div className="wb-shell-brand"><button type="button" className="wb-shell-logo" title="首页" aria-label="首页" onClick={() => onNavigate?.('home')}><PlantLogo size={28}/></button></div>
         <div className="wb-shell-tab-rail">
         <div ref={tablistRef} className="wb-shell-tabs" role="tablist" aria-label="工作台标签" aria-orientation="horizontal">
@@ -179,7 +180,7 @@ export default function WorkbenchShell({
                   onClick={() => onSelectTab?.(tab.id)}
                   onKeyDown={event => handleTabKeyDown(event, tab, index)}
                 >
-                  <ShellIcon icon={tab.icon} fallback={tab.id === 'home' ? 'home' : 'folder'} size={16} />
+                  <ShellIcon icon={tab.icon} fallback={tab.id === 'home' ? 'home' : 'folder'} size={14} />
                   <span className="wb-shell-tab-label">{tab.label}</span>
                   {tab.running && <span className="wb-shell-running" aria-hidden="true" />}
                 </button>
@@ -221,7 +222,7 @@ export default function WorkbenchShell({
           </div>}
           {!onToggleSidebar && !navigation.length && !openItems.length && <div className="wb-shell-menu-empty">暂无可打开的项目</div>}
         </div>}
-        <div className="wb-shell-actions"><button type="button" className="wb-shell-theme wb-shell-icon-button" title={theme==='dark'?'切换为浅色模式':'切换为深色模式'} aria-label={theme==='dark'?'切换为浅色模式':'切换为深色模式'} aria-pressed={theme==='dark'} onClick={onToggleTheme} disabled={!onToggleTheme}><Icon name={theme==='dark'?'sun':'moon'} size={18}/></button><button type="button" className="wb-shell-exit wb-shell-icon-button" title="返回对话" aria-label="返回对话" onClick={onExit} disabled={!onExit}><Icon name="message-square" size={19} /></button></div>
+        <div className="wb-shell-actions"><button type="button" className="wb-shell-theme wb-shell-icon-button" title={theme==='dark'?'切换为浅色模式':'切换为深色模式'} aria-label={theme==='dark'?'切换为浅色模式':'切换为深色模式'} aria-pressed={theme==='dark'} onClick={onToggleTheme} disabled={!onToggleTheme}><Icon name={theme==='dark'?'sun':'moon'} size={18}/></button><button type="button" className="wb-shell-exit wb-shell-icon-button" title="关闭设计师模式" aria-label="关闭设计师模式" onClick={onExit} disabled={!onExit}><Icon name="x" size={18} /></button></div>
       </header>
       <aside className="wb-shell-sidebar" aria-label="工作台侧栏" hidden={!sidebarVisible}>
         <div className="wb-shell-sidebar-scroll">
@@ -230,6 +231,7 @@ export default function WorkbenchShell({
           </nav>
         </div>
         <footer className="wb-shell-sidebar-footer">
+          {pluginVersion && <span className="wb-shell-version" title={`设计插件版本 v${pluginVersion}`}>v{pluginVersion}</span>}
           <nav className="wb-shell-navigation" aria-label="更多导航">
             {navigation.filter(item => item.bottom).map(renderNavigation)}
           </nav>

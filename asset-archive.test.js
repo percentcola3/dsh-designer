@@ -16,6 +16,25 @@ const png = Buffer.from([137,80,78,71,13,10,26,10,0,255,128]);
 const resource = (url,mimeType,bytes,extra = {}) => ({url,mimeType,bytesBase64:b64(bytes),...extra});
 const input = extra => ({importId:'i-test',source,resources:[],...extra});
 
+test('seven MiB captured TrueType data survives canonical base64 validation and full archive hashing',async()=>{
+  const bytes=Buffer.alloc(7*1024*1024,37);bytes.writeUInt32BE(0x00010000);let fetches=0;const captured=resource('https://example.test/fonts/japanese.ttf','font/ttf',bytes);
+  const collected=await collectRemoteResources([captured],{sourceUrl:source.url,maxBytes:64*1024*1024,fetch:async()=>{fetches++;throw Error('captured font must not be fetched')}});assert.equal(fetches,0);assert.deepEqual(collected.failures,[]);assert.equal(collected.resources.length,1);
+  const bundle=buildAssetBundle(input({resources:collected.resources}));assert.equal(bundle.record.integrity,'complete');assert.equal(bundle.record.resourceSummary.fonts.bytes,bytes.length);verifyFiles(bundle);assert.deepEqual(Buffer.from(bundle.files.find(file=>file.mimeType==='font/ttf').bytesBase64,'base64'),bytes);
+  const invalid=await collectRemoteResources([{...captured,bytesBase64:'='+captured.bytesBase64.slice(1)}]);assert.equal(invalid.resources.length,0);assert.equal(invalid.failures[0].code,'INVALID_BASE64');
+});
+
+test('static SVG export declarations and editor metadata sanitize without relaxing active or external reference guards',()=>{
+  const svg='<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">\n<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" inkscape:version="1.0" viewBox="0 0 468 144"><metadata><editor-data href="https://editor.example/info"/></metadata><defs><linearGradient id="paint"><stop style="stop-color:#115DA6" offset="0"/></linearGradient><style>.logo{fill:url(#paint)}</style></defs><path class="logo" d="M5.129,136.483v-18.872h2.744v18.872H5.129z"/></svg>';
+  const bundle=buildAssetBundle(input({html:'<img src="https://example.test/logo.svg">',resources:[resource('https://example.test/logo.svg','image/svg+xml',svg)]}));assert.equal(bundle.record.integrity,'complete');const saved=text(bundle.files.find(file=>file.mimeType==='image/svg+xml'));assert.ok(!/doctype|metadata|inkscape|editor-data/i.test(saved));assert.ok(saved.includes('stop-color:#115DA6'));assert.ok(saved.includes('url(#paint)'));assert.ok(saved.includes('viewBox="0 0 468 144"'));verifyFiles(bundle);
+  for(const dangerous of ['<!DOCTYPE svg [<!ENTITY secret SYSTEM "file:///private/secret">]><svg/>','<svg><script>alert(1)</script></svg>','<svg onload="alert(1)"/>','<svg><image href="https://external.example/image.png"/></svg>','<svg><style>@import "https://external.example/style.css";</style></svg>','<svg><path style="fill:url(https://external.example/a.svg#paint)"/></svg>','<svg><use href="javascript:alert(1)"/></svg>']){const rejected=buildAssetBundle(input({resources:[resource('https://example.test/unsafe.svg','image/svg+xml',dangerous)]}));assert.equal(rejected.record.integrity,'incomplete');assert.ok(rejected.manifest.failures.some(failure=>failure.code==='ACTIVE_RESOURCE'));assert.equal(rejected.manifest.resources.length,0);}
+});
+
+test('SVG generator comments before the standard DTD retain static logo styles and never hide active markup',()=>{
+  const xml='<?xml version="1.0" encoding="utf-8"?>\n',comment='<!-- Generator: Adobe Illustrator 19.1.0, SVG Export Plug-In . SVG Version: 6.00 Build 0)  -->\n',dtd='<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">\n';
+  for(const viewBox of ['0 0 450 175','-160 63.2 127.9 49.8']){const svg=xml+comment+'<!-- Additional inert export note -->\n'+dtd+'<svg xmlns="http://www.w3.org/2000/svg" viewBox="'+viewBox+'"><style>.st0{display:none}.st1{fill:url(#paint)}</style><defs><linearGradient id="paint"><stop offset="0" style="stop-color:#11A14E"/></linearGradient></defs><path class="st1" d="M0 0h10v10z"/></svg>',bundle=buildAssetBundle(input({resources:[resource('https://example.test/logo.svg','image/svg+xml',svg)]}));assert.equal(bundle.record.integrity,'complete');const saved=text(bundle.files.find(file=>file.mimeType==='image/svg+xml'));assert.ok(!/doctype|Generator:|Additional inert/.test(saved));assert.ok(saved.includes('viewBox="'+viewBox+'"'));assert.ok(saved.includes('.st0{display:none}'));assert.ok(saved.includes('fill:url(#paint)'));verifyFiles(bundle);}
+  for(const unsafe of ['<!DOCTYPE svg [<!ENTITY x SYSTEM "file:///private/secret">]><svg/>','<?xml-stylesheet type="text/css" href="https://external.example/style.css"?><svg/>','<svg><script>alert(1)</script></svg>','<svg><style>@import "https://external.example/style.css";</style></svg>','<!-- malformed -- comment --><svg/>']){const bundle=buildAssetBundle(input({resources:[resource('https://example.test/unsafe.svg','image/svg+xml',xml+comment+unsafe)]}));assert.equal(bundle.record.integrity,'incomplete');assert.ok(bundle.manifest.failures.some(failure=>failure.code==='ACTIVE_RESOURCE'));assert.equal(bundle.manifest.resources.length,0);}
+});
+
 test('design context retains complete long strings within the metadata byte limit',()=>{
   const context='图层上下文'.repeat(30000);const bundle=buildAssetBundle(input({source:{...source,kind:'figma'},context}));
   const file=bundle.files.find(f=>f.path===bundle.record.contextPath);assert.equal(JSON.parse(text(file)),context);
@@ -426,4 +445,16 @@ test('sandbox denial and incomplete receipts fail closed without publishing meta
     await assert.rejects(writeAssetFiles({...h,projectId:'p-test',files:bundle.files}));
     assert.equal(h.writes.length,0);
   }
+});
+
+test('mislabelled raster bytes keep the original URL and are archived with their actual MIME and extension',async()=>{
+  const url=source.url+'/partner.jpg';
+  const captured=await collectRemoteResources([resource(url,'image/jpeg',png)]);
+  assert.deepEqual(captured.failures,[]);
+  const bundle=buildAssetBundle(input({html:'<img src="'+url+'">',resources:captured.resources}));
+  const image=bundle.manifest.resources.find(item=>item.url===url);
+  assert.equal(bundle.record.integrity,'complete');assert.equal(image.mimeType,'image/png');
+  assert.match(image.path,/\.png$/);assert.ok(bundle.html.includes(image.path));
+  const invalid=await collectRemoteResources([resource(url,'image/jpeg','<html>Unavailable</html>')]);
+  assert.equal(invalid.failures[0].code,'MIME_MISMATCH');assert.equal(invalid.resources.length,0);
 });

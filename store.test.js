@@ -118,15 +118,17 @@ test('layout/canvas saves do not add HTML history; restore recovers exact prior 
   assert.ok(restored.artboards[0].revision > saved.artboard.revision);
 });
 
-test('design-system versions remain immutable and project selection pins a version',async () => {
+test('system selection follows current content and exact resource snapshots remain readable',async () => {
   const {store} = fixture(); const system = await store.systemCreate({name:'Brand',platforms:['mobile'],tokens:{color:{accent:'#12f'}}});
   const saved = await store.systemSave({systemId:system.id,expectedRevision:1,tokens:{color:{accent:'#f21'}},guidelines:'Use grid'});
-  assert.equal(saved.versions[0].tokens.color.accent,'#12f');assert.equal(saved.versions[1].tokens.color.accent,'#f21');
+  assert.equal(saved.versions.length,1);assert.equal(saved.versions[0].tokens.color.accent,'#f21');
+  assert.equal((await store.systemGet(system.id,undefined,1)).versions[0].tokens.color.accent,'#12f');
   const p = await store.projectCreate({name:'Versioned'});
   const updated = await store.projectUpdate({projectId:p.id,expectedRevision:1,systemId:system.id,systemVersion:1});
-  assert.equal(updated.systemVersion,1);
+  assert.equal(updated.systemVersion,2);
   await assert.rejects(store.systemSave({systemId:system.id,expectedRevision:1,tokens:{}}),expectCode('VERSION_CONFLICT'));
-  await assert.rejects(store.projectUpdate({projectId:p.id,expectedRevision:2,systemVersion:99}),expectCode('NOT_FOUND'));
+  for(let i=2;i<=101;i++)await store.systemSave({systemId:system.id,expectedRevision:i,tokens:{count:i}});
+  assert.equal((await store.systemGet(system.id)).versions.length,1);
 });
 
 test('rejects traversal, sibling escapes, symlink aliases and sandbox denials',async () => {
@@ -162,8 +164,9 @@ test('shared business service and scoped commit tool publish the same persistent
   for(const name of ['read','write','bash','shell'])assert.equal(agent.guards[0]({name}).includes('designer'),true);
   for(const name of ['designer_project','designer_commit_html','designer_workbench'])assert.equal(agent.guards[0]({name}),undefined);
   const project = (await service.execute({action:'project.get',projectId:p.id})).project;
+  const previousHtml=(await service.execute({action:'artboard.get',projectId:p.id,artboardId:project.artboards[0].id})).html;
   const result = await agent.scoped.get('designer_commit_html').execute({name:'AI home',html:doc('AI generated'),expectedRevision:project.revision},{signal:new AbortController().signal});
-  const loaded = await service.execute({action:'artboard.get',projectId:p.id,artboardId:result.artboard.id});assert.equal(loaded.html,normalizeDocument(doc('AI generated')).html);assert.equal(loaded.projectRevision,result.projectRevision);
+  const loaded = await service.execute({action:'artboard.get',projectId:p.id,artboardId:result.artboard.id});assert.equal(loaded.html,normalizeDocument(doc('AI generated'),{previousHtml}).html);assert.equal(loaded.projectRevision,result.projectRevision);
   const other = await service.execute({action:'project.create',name:'Other'});
   await assert.rejects(service.execute({action:'project.get',projectId:other.id},{agent}),expectCode('PROJECT_SCOPE'));
   await assert.rejects(service.execute({action:'root.set',root:'/workspace/Other'},{agent}),expectCode('PROJECT_SCOPE'));

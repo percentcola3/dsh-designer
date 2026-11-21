@@ -8,7 +8,7 @@ import nodeHttp from 'isomorphic-git/http/node';
 
 const fsp=fs.promises;
 const MAX_FILE=32*1024*1024,MAX_TOTAL=128*1024*1024,MAX_FILES=4000,MAX_JSON=190*1024*1024;
-const WRITES=new Set(['init','commit','fetch','push','fastForward']);
+const WRITES=new Set(['init','commit','fetch','push','fastForward','localCheckpoint']);
 const OPERATIONS=new Set([...WRITES,'status','branches','readSnapshot','detect','probe']);
 const own=(v,k)=>Object.prototype.hasOwnProperty.call(v,k);
 const oid=v=>typeof v==='string'&&/^[a-f0-9]{40}$/.test(v);
@@ -71,7 +71,7 @@ async function acquireLock(lockPath){
       try{const stat=await verified.stat(),bytes=await verified.readFile('utf8');if(current.ino!==before.ino||current.dev!==before.dev||stat.ino!==before.ino||stat.dev!==before.dev||bytes!==content)fail('GIT_BUSY','The private Git lock changed during recovery');}finally{await verified.close();}
       // The exact dead process record and inode were verified. No repository
       // objects or live project files participate in stale-lock recovery.
-      if(!path.isAbsolute(lockPath)||path.basename(lockPath)!=='engine.lock'||path.basename(path.dirname(lockPath))!=='git-sync')fail('GIT_UNSAFE_PATH','Private Git lock identity changed');
+      if(!path.isAbsolute(lockPath)||!((path.basename(lockPath)==='engine.lock'&&path.basename(path.dirname(lockPath))==='git-sync')||(path.basename(lockPath)==='dsh-history.lock'&&path.basename(path.dirname(lockPath))==='.git')))fail('GIT_UNSAFE_PATH','Private Git lock identity changed');
       await fsp.unlink(lockPath);
     }finally{await reader?.close();}
   }
@@ -177,10 +177,34 @@ async function detect(root){
   return {existingRepository:true,branch:await selectedBranch(options),remotes};
 }
 
+// Local history uses an independent ref and exact Host-observed bytes. It never
+// reads the working tree, runs hooks, changes a user's index or accesses remotes.
+async function localCheckpoint(root,input,signal){
+  const files=snapshotFiles(input.files),gitdir=path.join(root,'.git');
+  const existing=await detect(root);
+  if(existing.unsupportedGitdir)fail('GIT_WORKTREE_UNSUPPORTED','Local history requires a project-owned Git directory');
+  if(!existing.existingRepository)await git.init({fs,dir:root,defaultBranch:'dsh-history'});
+  await canonicalDirectory(gitdir);await scanNoLinks(gitdir,signal);
+  const lockPath=path.join(gitdir,'dsh-history.lock'),lock=await acquireLock(lockPath);
+  try{
+    const options={fs,dir:root,gitdir},ref='refs/heads/dsh-history';
+    const before=await resolveMaybe(options,ref),tree=await snapshotTree(options,files);
+    check(signal);
+    if(before&&await rootTree(options,before)===tree)return {initialized:true,created:false,head:before,branch:'dsh-history'};
+    const author={name:'DSH Designer',email:'designer@localhost',timestamp:Math.floor(Date.now()/1000),timezoneOffset:0};
+    const message=typeof input.message==='string'?input.message.slice(0,500):'Save design project';
+    const commit=await git.writeCommit({...options,commit:{tree,parent:before?[before]:[],author,committer:author,message:message+'\n'}});
+    if(await resolveMaybe(options,ref)!==before)fail('GIT_HEAD_CHANGED','Local history changed during checkpoint');
+    check(signal);await git.writeRef({...options,ref,value:commit,force:true});
+    return {initialized:true,created:true,head:commit,branch:'dsh-history'};
+  }finally{await lock.close();await fsp.unlink(lockPath);}
+}
+
 /** Run against a private object database; project source files are never checked out. */
 export async function runBuiltinGit(input,{signal}={}){
   if(!input||typeof input!=='object'||!OPERATIONS.has(input.operation))fail('GIT_INVALID_OPERATION','Unknown built-in Git operation');
   const root=await projectRoot(input.projectRoot);if(input.operation==='detect')return detect(root);
+  if(input.operation==='localCheckpoint')return localCheckpoint(root,input,signal);
   if(input.operation==='probe'){try{return await probe(input,signal);}catch(error){const safe=safeError(error);throw Object.assign(new Error(safe.message),safe);}}
   const branch=branchName(input.branch),write=WRITES.has(input.operation),validatedFiles=input.operation==='commit'?snapshotFiles(input.files):null,prefix=['commit','readSnapshot'].includes(input.operation)?scopePrefix(input.scopePrefix):null;
   if(write&&(!own(input,'expectedHead')||input.expectedHead!==null&&!oid(input.expectedHead)))fail('GIT_HEAD_REQUIRED','Pass the exact expected HEAD, or null for an unborn branch');
@@ -250,4 +274,5 @@ async function cli(){
   const timeout=Number.isSafeInteger(input.timeoutMs)&&input.timeoutMs>=1000&&input.timeoutMs<=120000?input.timeoutMs:60000;
   const result=await runBuiltinGit(input,{signal:AbortSignal.timeout(timeout)});process.stdout.write(JSON.stringify({ok:true,result}));
 }
-if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))cli().catch(error=>{process.stdout.write(JSON.stringify({ok:false,error:safeError(error)}));process.exitCode=1;});
+const invokedPath=process.argv[1]?await fsp.realpath(process.argv[1]).catch(()=>null):null;
+if(invokedPath===await fsp.realpath(fileURLToPath(import.meta.url)))cli().catch(error=>{process.stdout.write(JSON.stringify({ok:false,error:safeError(error)}));process.exitCode=1;});

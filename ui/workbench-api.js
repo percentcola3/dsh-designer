@@ -4,7 +4,7 @@ import {createProjectMachineApi,isProjectMachineAction} from './project-machine-
 // Shared-library writes and a clone's destination are not in the source project.
 export function workbenchActionScope(action,args={}){
  if(action.startsWith('composer.'))return 'raw';
- if(/^(group\.|system\.|ssh\.profile\.)/.test(action)||action.startsWith('knowledge.')&&action!=='knowledge.project.bind'||action==='reference.create'||action==='project.create'||action==='project.clone'||action==='project.initialize'&&!args.projectId)return 'library';
+ if(/^(group\.|system\.|ssh\.profile\.)/.test(action)||action.startsWith('knowledge.')&&action!=='knowledge.project.bind'||action==='reference.create'||action==='project.create'||action==='project.clone'||action==='project.restore'||action==='project.initialize'&&!args.projectId)return 'library';
  return args.projectId?'project':'raw';
 }
 const failure=(code,message)=>Object.assign(new Error(message),{code});

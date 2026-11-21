@@ -10,6 +10,19 @@ const code=value=>error=>error?.code===value;
 const apply=(model,ops,options={})=>applyDocumentOperations(typeof model==='string'?model:model.html,ops,options);
 const node=(model,domId)=>model.nodes[id(model,domId)];
 
+test('whole-page transactions resolve pending scene references before final strict validation',()=>{
+  const html=page('<p data-dsh-node="label">Ready</p><script id="dsh-document-model" type="application/json">'+JSON.stringify({schemaVersion:1,scenes:{active:'default',items:[]}})+'</script>');
+  const operations=[{type:'scene.set',scene:{id:'default',name:'Default',nodes:{}}}];
+  assert.throws(()=>apply(html,operations),code('INVALID_DOCUMENT'));
+  const result=apply(html,operations,{allowPendingScenes:true});
+  assert.equal(result.scenes.active,'default');assert.equal(result.scenes.items.length,1);
+  assert.equal(validateDocument(result.html).valid,true);
+  assert.throws(()=>apply(html,[],{allowPendingScenes:true,strict:false}),code('INVALID_DOCUMENT'));
+  assert.throws(()=>apply(html,operations,{allowPendingScenes:true,scopeMode:'selection',scopeNodeIds:['label']}),code('INVALID_SCOPE'));
+  const malformed=html.replace('"schemaVersion":1','"schemaVersion":2');
+  assert.throws(()=>apply(malformed,operations,{allowPendingScenes:true}),code('INVALID_DOCUMENT'));
+});
+
 test('legacy HTML gets deterministic identities and normalize is idempotent',()=>{
   const html=page('<main id="app"><p>Same</p><p>Same</p></main>');const a=normalizeDocument(html),b=normalizeDocument(html);
   assert.deepEqual(Object.keys(a.nodes),Object.keys(b.nodes));assert.equal(normalizeDocument(a.html).html,a.html);
@@ -104,6 +117,52 @@ test('insert, move, duplicate and remove preserve flow and make deleted referenc
   assert.equal(node(b,'b').parentId,id(a,'a'));assert.equal(node(b,'b').style.position,undefined);assert.equal(node(b,'root').childIds[1],id(b,'inserted'));
   const c=apply(b,[{type:'duplicate',nodeIds:[id(a,'a')]}]);assert.equal(c.changes.insertedNodeIds.length,3);assert.ok(c.changes.insertedNodeIds.every(x=>!a.nodes[x]));assert.ok(Object.values(c.nodes).some(n=>n.attributes.id?.startsWith('leaf-copy-')));
   const d=apply(c,[{type:'remove',nodeIds:[id(a,'leaf')]}]);const refs=resolveReferences(d,[id(a,'leaf'),{nodeId:id(a,'b'),kind:'selection'}]);assert.equal(refs.invalid.length,1);assert.equal(refs.resolved.length,1);
+});
+
+test('batch copies fill data and provide predictable IDs while remapping controls and scenes',()=>{
+  const source=normalizeDocument(page('<main data-dsh-node="list"><section data-dsh-node="row"><label for="name">姓名</label><input id="name" data-dsh-node="name" value="张明"><span data-dsh-node="title">张明</span><button data-dsh-node="open">展开</button><p data-dsh-node="detail" hidden>内容</p></section></main>'));
+  const a=apply(source,[{type:'interaction.set',interaction:{id:'toggle',type:'toggle',sourceId:'open',targetId:'detail'}},{type:'scene.set',scene:{id:'details',name:'详情',nodes:{detail:{hidden:false}}}}]);
+  const b=apply(a,[{type:'duplicate',nodeIds:['row'],copies:[
+    {prefix:'second',nodes:{row:{attributes:{'data-record':'2'}},title:{text:'李晓'},name:{attributes:{value:'李晓'}}}},
+    {prefix:'third',nodes:{title:{text:'王敏'},detail:{styles:{color:'#123456'}}}},
+  ]},{type:'text',nodeIds:['third:title'],value:'王敏 · 已确认'}]);
+  assert.deepEqual(b.nodes.list.childIds,['row','second:row','third:row']);
+  assert.equal(b.nodes.title.text,'张明');assert.equal(b.nodes['second:title'].text,'李晓');
+  assert.equal(b.nodes['third:title'].text,'王敏 · 已确认');assert.equal(b.nodes['second:name'].attributes.value,'李晓');
+  assert.equal(b.nodes['second:row'].attributes['data-record'],'2');assert.equal(b.nodes['third:detail'].style.color,'#123456');
+  const label=Object.values(b.nodes).find(n=>n.parentId==='second:row'&&n.tag==='label');
+  assert.equal(label.attributes.for,b.nodes['second:name'].attributes.id);assert.notEqual(label.attributes.for,'name');
+  assert.ok(b.interactions.some(i=>i.sourceId==='second:open'&&i.targetId==='second:detail'));
+  assert.equal(b.scenes.items[0].nodes['third:detail'].hidden,false);
+  assert.equal(b.changes.copies[0].nodeIdMap.title,'second:title');assert.equal(b.changes.copies[1].rootId,'third:row');
+  assert.equal(validateDocument(b.html).valid,true);
+});
+
+test('copy data cannot target other subtrees, overwrite identities or bypass locked/shared fields',()=>{
+  const a=normalizeDocument(page('<section data-dsh-node="row"><span data-dsh-node="name" data-dsh-slot="name">Name</span></section><aside data-dsh-node="outside">Outside</aside>'));
+  for(const copies of [
+    [{prefix:'one',nodes:{outside:{text:'No'}}}],
+    [{prefix:'one'},{prefix:'one'}],
+    [{prefix:'one',nodes:{name:{attributes:{'data-dsh-node':'outside'}}}}],
+    [{prefix:'one',nodes:{name:{attributes:{onclick:'bad()'}}}}],
+  ])assert.throws(()=>apply(a,[{type:'duplicate',nodeIds:['row'],copies}]));
+  assert.equal(a.nodes.outside.text,'Outside');
+  const locked=apply(a,[{type:'lock',nodeIds:['name'],locked:true}]);
+  assert.throws(()=>apply(locked,[{type:'duplicate',nodeIds:['row'],copies:[{prefix:'one',nodes:{name:{text:'No'}}}]}]),code('LOCKED_NODE'));
+  const shared=apply(a,[{type:'definition.set',definition:{id:'def',rootId:'row',instanceIds:[]}}]);
+  const copied=apply(shared,[{type:'duplicate',nodeIds:['row'],scope:'instance',copies:[{prefix:'one',nodes:{name:{text:'Local'}}}]}]);
+  const propagated=apply(copied,[{type:'text',nodeIds:['name'],scope:'definition',value:'Shared'}]);
+  assert.equal(propagated.nodes.name.text,'Shared');assert.equal(propagated.nodes['one:name'].text,'Local');
+});
+
+test('copies reconnect native form ownership, datalists and component ID triggers',()=>{
+  const a=make('<section id="source"><form id="form"></form><input id="field" form="form" list="choices" aria-errormessage="error"><datalist id="choices"><option value="A"></option></datalist><p id="error">说明</p><button id="open" data-ds-open="panel" data-ds-show="notice" aria-controls="panel">打开</button><div id="panel">面板</div><div id="notice">提示</div></section>');
+  const b=apply(a,[{type:'duplicate',nodeIds:[id(a,'source')],copies:[{prefix:'copy'}]}]),map=b.changes.copies[0].nodeIdMap;
+  const copied=domId=>b.nodes[map[id(a,domId)]].attributes;
+  assert.equal(copied('field').form,copied('form').id);assert.equal(copied('field').list,copied('choices').id);
+  assert.equal(copied('field')['aria-errormessage'],copied('error').id);
+  assert.equal(copied('open')['data-ds-open'],copied('panel').id);assert.equal(copied('open')['data-ds-show'],copied('notice').id);
+  assert.equal(copied('open')['aria-controls'],copied('panel').id);
 });
 
 test('region replacement preserves its root/confirmed children and every outside identity',()=>{
@@ -234,8 +293,8 @@ test('progressive operation help exposes executable interaction examples without
 function runtimeDOM(html){
   const ast=parse(html),events=new Map(),domNodes=[],walk=(n,parent)=>{if(n.tagName){const attrs=new Map((n.attrs||[]).map(a=>[a.name,a.value])),listeners=new Map(),styles=new Map();const node={tagName:n.tagName.toUpperCase(),parent,children:[],hidden:attrs.has('hidden'),disabled:attrs.has('disabled'),checked:attrs.has('checked'),value:attrs.get('value')||'',tabIndex:0,open:false,get attributes(){return [...attrs].map(([name,value])=>({name,value}))},get textContent(){return (n.childNodes||[]).map(text).join('')},set textContent(value){n.childNodes=[{nodeName:'#text',value:String(value)}];this.children=[]},getAttribute:k=>attrs.has(k)?attrs.get(k):null,setAttribute(k,v){attrs.set(k,String(v));if(k==='disabled')this.disabled=true;if(k==='hidden')this.hidden=true},removeAttribute(k){attrs.delete(k);if(k==='disabled')this.disabled=false;if(k==='hidden')this.hidden=false},style:{setProperty(k,v){styles.set(k,v)},removeProperty:k=>styles.delete(k),getPropertyValue:k=>styles.get(k)||''},classList:{toggle(k){const values=new Set((attrs.get('class')||'').split(/\s+/).filter(Boolean));if(values.has(k))values.delete(k);else values.add(k);attrs.set('class',[...values].join(' '))}},addEventListener(k,fn){if(!listeners.has(k))listeners.set(k,[]);listeners.get(k).push(fn)},dispatch(k,target=this){const e={type:k,target,preventDefault(){this.defaultPrevented=true}};for(const fn of listeners.get(k)||[])fn(e);return e},contains(other){for(let at=other;at;at=at.parent)if(at===this)return true;return false},querySelector(){return this.children[0]||null},focus(){document.activeElement=this},scrollIntoView(){this.scrolled=true},setCustomValidity(){}};domNodes.push(node);if(parent)parent.children.push(node);for(const child of n.childNodes||[])walk(child,node);return node}for(const child of n.childNodes||[])walk(child,parent)};
   const text=n=>n.nodeName==='#text'?n.value:(n.childNodes||[]).map(text).join('');
-  const document={readyState:'complete',activeElement:null,getElementById:value=>domNodes.find(n=>n.getAttribute('id')===value),querySelectorAll:()=>domNodes.filter(n=>n.getAttribute('data-dsh-node')),addEventListener(name,fn){if(!events.has(name))events.set(name,[]);events.get(name).push(fn)},dispatch(name,detail){for(const fn of events.get(name)||[])fn({detail,key:detail?.key,preventDefault(){}})}};
-  walk(ast,null);const messages=[],location={href:'about:blank'},history={count:0,back(){this.count++}},window={parent:{postMessage:msg=>messages.push(msg)}};vm.runInNewContext(interactionRuntimeSource(),{document,window,location,history,Map,Set,Array,JSON,Object,String,RegExp});return {document,window,location,history,messages,get:id=>document.getElementById(id)};
+  const document={readyState:'complete',activeElement:null,getElementById:value=>domNodes.find(n=>n.getAttribute('id')===value),querySelectorAll:()=>domNodes.filter(n=>n.getAttribute('data-dsh-node')),addEventListener(name,fn){if(!events.has(name))events.set(name,[]);events.get(name).push(fn)},dispatchEvent(event){this.dispatch(event.type,event.detail);return true},dispatch(name,detail){for(const fn of events.get(name)||[])fn({detail,key:detail?.key,preventDefault(){}})}};
+  walk(ast,null);const messages=[],location={href:'about:blank'},history={count:0,back(){this.count++}},window={parent:{postMessage:msg=>messages.push(msg)}};vm.runInNewContext(interactionRuntimeSource(),{document,window,location,history,Map,Set,Array,JSON,Object,String,RegExp,CustomEvent:class{constructor(type,options={}){this.type=type;this.detail=options.detail}},getComputedStyle:node=>({display:node.hidden?'none':'block',visibility:'visible'})});return {document,window,location,history,messages,get:id=>document.getElementById(id)};
 }
 
 test('standalone modal/toggle/tabs/filter/form/feedback work and reset example data',()=>{
@@ -265,4 +324,38 @@ test('runtime state, scene events and preview vs delivery page navigation share 
   a=apply(a,[{type:'state.set',nodeIds:[id(a,'button')],states:{hover:{styles:{color:'red'}},loading:{text:'Loading'},disabled:{text:'Disabled'}}},{type:'scene.set',scene:{id:'scene-error',kind:'error',nodes:{[id(a,'status')]:{text:'Failed'}}}},{type:'interaction.set',interaction:{id:'i-next',type:'navigate',sourceId:id(a,'next'),pageId:'page-next'}}]);
   const preview=runtimeDOM(a.html);preview.window.__DSH_DESIGN_RUNTIME__.setState(id(a,'button'),'loading');assert.equal(preview.get('button').textContent,'Loading');preview.document.dispatch('dsh:scene',{id:'scene-error'});assert.equal(preview.get('status').textContent,'Failed');preview.document.dispatch('dsh:scene',{reset:true});assert.equal(preview.get('status').textContent,'Ready');preview.get('next').dispatch('click');assert.equal(preview.messages[0].type,'dsh:runtime');assert.equal(preview.messages[0].pageId,'page-next');assert.equal(preview.location.href,'about:blank');
   const delivery=runtimeDOM(exportDocument(a.html,{mode:'delivery',pageURLs:{'page-next':'./other.html'}}).html);delivery.get('next').dispatch('click');assert.equal(delivery.location.href,'./other.html');assert.equal(delivery.messages.length,0);
+});
+
+test('applied scene notifications reach business listeners without applying saved variants twice',()=>{
+  let model=make('<p id="status">Initial</p>');
+  model=apply(model,[{type:'scene.set',scene:{id:'saved',nodes:{[id(model,'status')]:{text:'Saved'}}}}]);
+  const dom=runtimeDOM(model.html),runtime=dom.window.__DSH_DESIGN_RUNTIME__;
+  runtime.setScene('saved');dom.get('status').textContent='Business listener value';
+  dom.document.dispatch('dsh:scene',{id:'saved',applied:true});
+  assert.equal(dom.get('status').textContent,'Business listener value');
+  dom.document.dispatch('dsh:scene',{id:'saved'});assert.equal(dom.get('status').textContent,'Saved');
+  runtime.reset();dom.get('status').textContent='Reset listener value';
+  dom.document.dispatch('dsh:preview-reset',{applied:true});assert.equal(dom.get('status').textContent,'Reset listener value');
+});
+
+test('misnamed metadata markers produce a concrete diagnostic while source remains readable',()=>{
+  const document=normalizeDocument('<!doctype html><html><body><p data-dsh-node="text">Content</p><script id="dsh-model" data-dsh-document-model type="application/json">{"schemaVersion":1,"scenes":{"items":[]}}</script></body></html>');
+  assert.ok(document.diagnostics.some(d=>d.code==='MODEL_ID_REQUIRED'&&d.message.includes('dsh-document-model')));assert.equal(document.nodes.text.text,'Content');
+});
+
+test('Escape closes component-hosted modal methods and restores the original trigger focus',()=>{
+  let model=make('<button id="open">Open</button><ds-dialog id="panel"><button id="close">Close</button></ds-dialog>');
+  model=apply(model,[{type:'interaction.set',interaction:{id:'open-panel',type:'modal',sourceId:id(model,'open'),targetId:id(model,'panel')}}]);
+  const dom=runtimeDOM(model.html),panel=dom.get('panel'),trigger=dom.get('open');
+  delete panel.open;
+  panel.showModal=()=>{panel.setAttribute('open','');dom.get('close').focus();};
+  let closed=0;
+  panel.close=()=>{closed++;panel.removeAttribute('open');dom.document.dispatch('ds-close',{target:panel});};
+  trigger.focus();trigger.dispatch('click');
+  assert.equal(dom.document.activeElement,dom.get('close'));
+  assert.equal(dom.window.__DSH_DESIGN_RUNTIME__.getState().controls.open[id(model,'panel')],true);
+  dom.document.dispatch('keydown',{key:'Escape'});
+  assert.equal(closed,1);assert.equal(panel.getAttribute('open'),null);
+  assert.equal(panel.hidden,true);assert.equal(dom.document.activeElement,trigger);
+  assert.equal(dom.window.__DSH_DESIGN_RUNTIME__.getState().controls.open[id(model,'panel')],false);
 });

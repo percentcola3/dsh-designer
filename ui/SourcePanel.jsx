@@ -1,13 +1,44 @@
 import React from "react";
-import { Button, ErrorBox, FieldError, errorValue } from "./common.jsx";
+import {Icon} from "./brand.jsx";
+import websiteBrowserStyles from "./website-browser-styles.js";
+import { Button, Modal, ErrorBox, FieldError, errorValue } from "./common.jsx";
 import {readFrozenSource} from './source-preview.js';
 import { uploadFile } from "./upload.js";
 import {requireSavedSourceResult} from './source-result.js';
+import WebsiteSession from './WebsiteSession.jsx';
+import ProjectGroupSelect from './ProjectGroupSelect.jsx';
 import SourceOutline from './SourceOutline.jsx';
 import {selectedWebsiteNodes,websiteSelectionArgs,providerSelectionArgs,mergeSourceOutline,sourceRefreshArgs} from './source-selection.js';
-import {sourceStateLabel,selectSourceRecord,hydrateSourceForm,sourceViewTransition,sourceResponseCurrent,sourceFormAfterResponse,pinnedSourceBinding,websitePlanInput,websiteDraftKey,websitePreviewReady} from './source-state.js';
+import {sourceStateLabel,selectSourceRecord,hydrateSourceForm,sourceViewTransition,sourceResponseCurrent,sourceFormAfterResponse,normalizeWebsiteURL,pinnedSourceBinding,websitePlanInput,websiteDraftKey,websitePreviewReady} from './source-state.js';
 const imageURL = (p) => typeof p === "string" ? p : p?.url || p?.previewUrl || p?.screenshotUrl || p?.imageUrl || p?.screenshot;
-function SourcePanel({ api, project, design, provider = "website", legacy = {}, t, mutate, onReference, selection: canvasSelection, onViewState, viewState = {}, initialSourceId, referenceToLocate }) {
+const websiteSizes = {web:{width:1440,height:900},mobile:{width:390,height:844}};
+
+function viewportOption(id,label,icon,dimensions) {
+  return {id,name:<span className="wb-viewport-option" data-size={id}><Icon name={icon} size={15}/><span>{label}</span>
+    {dimensions&&<small>{dimensions}</small>}</span>};
+}
+
+function WebsitePreviewFrame({preview,onLoad,onError}) {
+  const host=React.useRef(null);
+  const [scale,setScale]=React.useState(1);
+  React.useLayoutEffect(()=>{
+    const element=host.current;
+    const fit=()=>setScale(Math.min(1,element.clientWidth/preview.width,element.clientHeight/preview.height));
+    fit();
+    const observer=new ResizeObserver(fit);
+    observer.observe(element);
+    return ()=>observer.disconnect();
+  },[preview.width,preview.height]);
+  return <div ref={host} className="wb-website-stage">
+    <div style={{width:preview.width*scale,height:preview.height*scale}}>
+      <div className="wb-website-sheet" style={{width:preview.width,height:preview.height,transform:`scale(${scale})`}}>
+        {preview.html?<iframe title="网页预览" srcDoc={preview.html} sandbox="" onLoad={onLoad}/>:
+          <img src={preview.image} alt="网页预览" onLoad={onLoad} onError={onError}/>}
+      </div>
+    </div>
+  </div>;
+}
+function SourcePanel({ api, project, design, provider = "website", activePanel = true, legacy = {}, t, mutate, onOpenReplica, onReference, selection: canvasSelection, onViewState, viewState = {}, initialSourceId, referenceToLocate }) {
   const existing = project.workbench?.sourceImports || [];
   const initialRecord=React.useRef(selectSourceRecord(existing,initialSourceId||viewState.sourceId)).current;
   const resumeDraft=!initialSourceId||initialSourceId===viewState.sourceId;
@@ -17,18 +48,23 @@ function SourcePanel({ api, project, design, provider = "website", legacy = {}, 
   const recordRef=React.useRef(initialRecord),sourceView=React.useRef({sourceId:initialRecord?.id||initialSourceId||viewState.sourceId||null,sequence:0}),requestSerial=React.useRef(0),revisionRef=React.useRef(project.revision);
   const [source, setSource] = React.useState(initialForm.source), [url, setURL] = React.useState(initialForm.url), [name, setName] = React.useState(initialForm.name), [selected, setSelected] = React.useState(initialForm.selected), [record, setRecord] = React.useState(initialRecord), [version, setVersion] = React.useState(null), [outline, setOutline] = React.useState([]), [comparison, setComparison] = React.useState(null), [result, setResult] = React.useState(null), [error, setError] = React.useState(null), [busy, setBusy] = React.useState(false), [importOpen, setImportOpen] = React.useState(false), [compareMode, setCompareMode] = React.useState(viewState.compareMode || "side"), [opacity, setOpacity] = React.useState(viewState.opacity ?? 0.5), [zoom, setZoom] = React.useState(viewState.zoom || 1), [sync, setSync] = React.useState(true), [region, setRegion] = React.useState(null), [faithful, setFaithful] = React.useState(initialForm.faithful), [width, setWidth] = React.useState(initialRecord?initialForm.width:viewState.width||1440), [height, setHeight] = React.useState(initialRecord?initialForm.height:viewState.height||900), [refresh, setRefresh] = React.useState(null), [targetPageId, setTargetPageId] = React.useState(viewState.targetPageId ?? design?.pageIds?.[0] ?? ""), [pagesText, setPagesText] = React.useState(initialForm.pagesText), [statesText, setStatesText] = React.useState(initialForm.statesText), [regionsText, setRegionsText] = React.useState(initialForm.regionsText), [captureScope, setCaptureScope] = React.useState(initialForm.captureScope), [viewportsText, setViewportsText] = React.useState(initialForm.viewportsText), [path, setPath] = React.useState(initialRecord?initialForm.path:viewState.path||""), [captureId, setCaptureId] = React.useState(viewState.captureId || ""), [regionSelect, setRegionSelect] = React.useState(false), [versionId, setVersionId] = React.useState((!initialSourceId||initialSourceId===viewState.sourceId?viewState.versionId:undefined)||initialForm.versionId), [revision, setRevision] = React.useState(project.revision);
   const panels = React.useRef([]), frames = React.useRef([]), drag = React.useRef(null), scrollLock = React.useRef(false), savedScroll = React.useRef(viewState.scroll || [{ top: 0, left: 0 }, { top: 0, left: 0 }]), token = React.useRef("compare-" + crypto.randomUUID());
+  const [fileImportPhase,setFileImportPhase]=React.useState('idle');
+  const fileImportRun=React.useRef(null),fileImportBusy=['planning','uploading','reading'].includes(fileImportPhase);
   const [websitePreview,setWebsitePreview]=React.useState(null),[previewSeen,setPreviewSeen]=React.useState(false),[websitePhase,setWebsitePhase]=React.useState('idle'),[websiteFieldError,setWebsiteFieldError]=React.useState(null),[binding,setBinding]=React.useState(null),[bindingLoading,setBindingLoading]=React.useState(false),[bindingProblem,setBindingProblem]=React.useState(false),[connection,setConnection]=React.useState(null);
-  const fidelityChosen=React.useRef(!!initialRecord||typeof viewState.faithful==='boolean');
-  const websiteRun=React.useRef(null),previewRef=React.useRef(null),bindingEpoch=React.useRef(0),mounted=React.useRef(true),ownerRef=React.useRef('');ownerRef.current=project.id+':'+(design?.id||'');previewRef.current=websitePreview;
+  const fidelityChosen=React.useRef(provider==='website'||!!initialRecord||typeof viewState.faithful==='boolean');
+  const [recording,setRecording]=React.useState(false);
+  const [customSize,setCustomSize]=React.useState(null);
+  const websiteRun=React.useRef(null),websiteSubmission=React.useRef(false),previewRef=React.useRef(null),bindingEpoch=React.useRef(0),mounted=React.useRef(true),ownerRef=React.useRef('');ownerRef.current=project.id+':'+(design?.id||'');previewRef.current=websitePreview;
   const websiteBusy=['planning','capturing','reading'].includes(websitePhase),websiteForm={url,name,width,height,pagesText,statesText,regionsText,viewportsText,captureScope,faithful},draftKey=websiteDraftKey(websiteForm,binding);
-  React.useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;websiteRun.current=null;bindingEpoch.current++;};},[]);
+  const [websiteHistory,setWebsiteHistory]=React.useState({entries:[],index:-1});
+  React.useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;websiteRun.current=null;fileImportRun.current=null;bindingEpoch.current++;};},[]);
   const loadBinding=async()=>{const epoch=++bindingEpoch.current,owner=ownerRef.current;setBindingLoading(true);setBindingProblem(false);try{const response=await api('binding.resolve',{projectId:project.id,designId:design?.id});if(mounted.current&&epoch===bindingEpoch.current&&owner===ownerRef.current){const pin=pinnedSourceBinding(response);setBinding(pin);if(!fidelityChosen.current)setFaithful(!pin);}}catch{if(mounted.current&&epoch===bindingEpoch.current&&owner===ownerRef.current){setBinding(null);setBindingProblem(true);}}finally{if(mounted.current&&epoch===bindingEpoch.current&&owner===ownerRef.current)setBindingLoading(false);}};
   React.useEffect(()=>{if(source==='website')loadBinding();},[project.id,design?.id,project.revision,source]);
   React.useEffect(()=>{revisionRef.current=Math.max(revisionRef.current,project.revision);setRevision(revisionRef.current);},[project.revision]);
   const applyForm=form=>{setSource(form.source);setURL(form.url);setName(form.name);setSelected(form.selected);setFaithful(form.faithful);setWidth(form.width);setHeight(form.height);setPagesText(form.pagesText);setStatesText(form.statesText);setRegionsText(form.regionsText);setCaptureScope(form.captureScope);setViewportsText(form.viewportsText);setPath(form.path);};
   const chooseSource=(next,{force=false,versionId:chosenVersion}={})=>{
     const id=next?.id||null,previousId=recordRef.current?.id||null,changed=previousId!==id;
-    if(force){websiteRun.current=null;setWebsitePhase('idle');setWebsitePreview(null);setPreviewSeen(false);setWebsiteFieldError(null);}
+    if(force){websiteRun.current=null;fileImportRun.current=null;setFileImportPhase('idle');setWebsitePhase('idle');setWebsitePreview(null);setPreviewSeen(false);setWebsiteFieldError(null);}
     if(force||sourceView.current.sourceId!==id){sourceView.current=sourceViewTransition(sourceView.current,id);requestSerial.current++;setBusy(false);}
     if(changed||force){if(changed){setNodeSelection(next?.kind==='website'?selectedWebsiteNodes(next):(next?.pages||[]).map(page=>page.sourceNodeId).filter(Boolean));setSelectionMode('pages');setDiscovery(null);setReviewNote('');setReviewPages([]);}if(changed)applyForm(sourceFormAfterResponse(previousId,next,{},provider));setVersion(null);setVersionId(chosenVersion??next?.latestVersionId??'');setCaptureId('');setOutline([]);setComparison(null);setResult(null);setError(null);setRegion(null);setRefresh(null);savedScroll.current=[{top:0,left:0},{top:0,left:0}];}
     recordRef.current=next;setRecord(next);
@@ -42,11 +78,11 @@ function SourcePanel({ api, project, design, provider = "website", legacy = {}, 
     const ticket={...sourceView.current,requestId:++requestSerial.current},owner=ownerRef.current;
     setBusy(true);setError(null);
     try {
-      const r=await api('workbench.source.'+action,{projectId:project.id,designId:design?.id,expectedRevision:revisionRef.current,...args});
+      const r=await api('workbench.source.'+action,{projectId:project.id,...(action==='replicate'?{}:{designId:design?.id}),expectedRevision:revisionRef.current,...args});
       if(!mounted.current||owner!==ownerRef.current)return null;
       revisionRef.current=Math.max(revisionRef.current,r.projectRevision||r.project?.revision||0);setRevision(revisionRef.current);
       let metadataWarning=null;
-      if(['generate','rebuild','applyRefresh','review'].includes(action)&&mutate)await mutate('workspace.open',{},true);
+      if(['replicate','generate','rebuild','applyRefresh','review'].includes(action)&&mutate)await mutate('workspace.open',{},true);
       else if(['plan','select','capture','import','refreshPreview'].includes(action)){try{await api('workspace.open',{projectId:project.id});}catch(error){metadataWarning=errorValue('来源操作已保存，库元数据刷新失败：'+error.message,'SOURCE_METADATA_REFRESH_FAILED');}}
       if(!mounted.current||owner!==ownerRef.current||!sourceResponseCurrent(ticket,sourceView.current,requestSerial.current,r.source?.id,{createsSource:action==='plan'}))return null;
       if(r.source)chooseSource(r.source);
@@ -111,25 +147,85 @@ function SourcePanel({ api, project, design, provider = "website", legacy = {}, 
       await work("read", { sourceId, versionId: r.version.id });
     }
   };
-  const previewWebsite=async()=>{
-    if(websiteRun.current||busy)return;const token={},owner=ownerRef.current,snapshot={...websiteForm};websiteRun.current=token;const current=()=>mounted.current&&websiteRun.current===token&&owner===ownerRef.current;
+  const previewWebsite=async({address,historyIndex,viewport,restored}={})=>{
+    if(websiteRun.current||busy||fileImportBusy)return;const token={},owner=ownerRef.current,snapshot={...websiteForm,...viewport};websiteRun.current=token;const current=()=>mounted.current&&websiteRun.current===token&&owner===ownerRef.current;
     setWebsitePhase('planning');setWebsitePreview(null);setPreviewSeen(false);setWebsiteFieldError(null);setError(null);
     try{
+      snapshot.url=normalizeWebsiteURL(address??snapshot.url);
+      if(address!==undefined){
+        Object.assign(snapshot,{pagesText:'',statesText:'',regionsText:'',viewportsText:'',captureScope:'page'});
+      }
+      setURL(snapshot.url);
       let pin=null;if(!snapshot.faithful||!fidelityChosen.current){bindingEpoch.current++;setBindingLoading(false);pin=pinnedSourceBinding(await api('binding.resolve',{projectId:project.id,designId:design?.id}));if(!current())return;setBinding(pin);if(!fidelityChosen.current){snapshot.faithful=!pin;setFaithful(snapshot.faithful);}}
-      const input=websitePlanInput(snapshot,pin),key=websiteDraftKey(snapshot,pin),planned=await work('plan',input);if(!current()||!planned)return;
-      if(!planned.source?.id)throw errorValue('采集计划没有返回来源标识，请重试。','SOURCE_PLAN_INVALID');
-      applyForm({...snapshot,source:'website',selected:planned.source.pages?.map(page=>page.sourceNodeId||page.id)||[],path});
-      setWebsitePhase('capturing');const captured=await work('capture',{sourceId:planned.source.id,allowPartial:false});if(!current()||!captured)return;requireSavedSourceResult(captured);
-      setWebsitePhase('reading');const frozen=await work('read',{sourceId:planned.source.id,versionId:captured.version.id});if(!current()||!frozen)return;
-      const selectedCapture=frozen.version?.captures?.[0]||captured.version.captures?.[0];if(!selectedCapture?.id)throw errorValue('浏览器没有保存可预览的冻结快照，请检查连接后重试。','SOURCE_PREVIEW_MISSING');
-      const loaded=await readFrozenSource(args=>current()?work('read',args):Promise.resolve(null),{sourceId:planned.source.id,versionId:captured.version.id,captureId:selectedCapture.id,preview:selectedCapture.preview,origin:location.origin,assetBase:frozen.assetBase});if(!current()||!loaded)return;
-      setCaptureId(selectedCapture.id);setWebsitePreview({...loaded,draftKey:key,pin,url:input.url,createdAt:frozen.version?.createdAt});setWebsitePhase('ready');
-    }catch(error){if(current()){if(error.code==='SOURCE_FIELD_INVALID')setWebsiteFieldError(error);else setError(error);setWebsitePhase('idle');}}
+      const stop=(message,code)=>{setWebsitePhase('failed');setError(previous=>previous||errorValue(message,code));};
+      const input=websitePlanInput(snapshot,pin),key=websiteDraftKey(snapshot,pin);
+      setWebsiteHistory(previous=>{
+        if(Number.isInteger(historyIndex)&&previous.entries[historyIndex]===input.url)return {...previous,index:historyIndex};
+        if(previous.entries[previous.index]===input.url)return previous;
+        const entries=[...previous.entries.slice(0,previous.index+1),input.url];
+        return {entries,index:entries.length-1};
+      });
+      let plannedSourceId=restored?.sourceId,capturedVersion=restored?.versionId;
+      if(!capturedVersion){
+        const planned=await work('plan',input);if(!current())return;if(!planned){stop('网页采集计划未能继续，请重试。','SOURCE_PLAN_INTERRUPTED');return;}
+        if(!planned.source?.id)throw errorValue('采集计划没有返回来源标识，请重试。','SOURCE_PLAN_INVALID');
+        plannedSourceId=planned.source.id;
+        applyForm({...snapshot,source:'website',selected:planned.source.pages?.map(page=>page.sourceNodeId||page.id)||[],path});
+        setWebsitePhase('capturing');const captured=await work('capture',{sourceId:plannedSourceId,allowPartial:true,closeAfterCapture:true});if(!current())return;if(!captured){stop('浏览器未能取得冻结快照，请重新预览网页。','SOURCE_CAPTURE_FAILED');return;}requireSavedSourceResult(captured);
+        capturedVersion=captured.version.id;
+      }
+      setWebsitePhase('reading');const frozen=await work('read',{sourceId:plannedSourceId,versionId:capturedVersion});if(!current())return;if(!frozen){stop('冻结来源读取失败，请重新预览。','SOURCE_PREVIEW_READ_FAILED');return;}
+      const matches=frozen.version?.captures?.filter(item=>!restored?.viewportId||item.viewportId===restored.viewportId)||[];
+      const selectedCapture=matches.find(item=>item.id===restored?.captureId)||matches[0];if(!selectedCapture?.id)throw errorValue('浏览器没有保存可预览的冻结快照，请检查连接后重试。','SOURCE_PREVIEW_MISSING');
+      const loaded=await readFrozenSource(args=>current()?work('read',args):Promise.resolve(null),{sourceId:plannedSourceId,versionId:capturedVersion,captureId:selectedCapture.id,preview:selectedCapture.preview,origin:location.origin,assetBase:frozen.assetBase,preferHTML:true});if(!current())return;if(!loaded){stop('冻结预览读取失败，请重新预览。','SOURCE_PREVIEW_READ_FAILED');return;}
+      setCaptureId(selectedCapture.id);setWebsitePreview({...loaded,width:input.viewports[0].width,height:input.viewports[0].height,draftKey:key});setWebsitePhase('ready');
+    }catch(error){if(current()){if(error.code==='SOURCE_FIELD_INVALID'){setWebsiteFieldError(error);setWebsitePhase('idle');}else{setError(error);setWebsitePhase('failed');}}}
     finally{if(current()){websiteRun.current=null;setWebsitePhase(value=>['planning','capturing','reading'].includes(value)?'idle':value);}}
   };
-  const previewFrozenHTML=async()=>{const prior=websitePreview;if(!prior||websiteRun.current||busy)return;const token={},owner=ownerRef.current;websiteRun.current=token;const current=()=>mounted.current&&websiteRun.current===token&&owner===ownerRef.current&&previewRef.current===prior;setWebsitePhase('reading');setPreviewSeen(false);try{const loaded=await readFrozenSource(args=>current()?work('read',args):Promise.resolve(null),{...prior,origin:location.origin,preferHTML:true});if(current()&&loaded){setWebsitePreview({...prior,...loaded});setWebsitePhase('ready');}}catch(error){if(current()){setError(error);setWebsitePhase('preview-error');}}finally{if(websiteRun.current===token){websiteRun.current=null;setWebsitePhase(value=>value==='reading'?'preview-error':value);}}};
-  const replicateWebsite=async()=>{if(!websitePreviewReady(websitePreview,{draftKey,sourceId,versionId:frozenVersion,captureId,seen:previewSeen,designId:design?.id})){setError(errorValue('请先预览当前地址与选项对应的冻结网页，再开始复刻。','SOURCE_PREVIEW_REQUIRED'));return;}await work('generate',{sourceId:websitePreview.sourceId,versionId:websitePreview.versionId,captureIds:[websitePreview.captureId],target:{projectId:project.id,designId:design.id,scope:'design'}});};
-  const inspectConnection=async()=>{setError(null);try{const response=await api('connection.status',{});const items=Array.isArray(response)?response:response.connections||[];setConnection(items.find(item=>item.provider===source)||{provider:source,configured:false});}catch(error){setError(error);}};
+  const autoOpened=React.useRef(false);
+  React.useEffect(()=>{
+    if(!activePanel||source!=='website'||autoOpened.current||busy||referenceToLocate)return;
+    let cancelled=false;
+    queueMicrotask(()=>{
+      if(cancelled||autoOpened.current)return;
+      autoOpened.current=true;
+      if(!initialForm.url||url!==initialForm.url||websiteRun.current||websitePreview)return;
+      let address;
+      try{address=normalizeWebsiteURL(initialForm.url);}catch{return;}
+      const storedViewport=initialRecord?.viewports?.find(item=>item.width===Number(width)&&item.height===Number(height));
+      const restored=initialRecord?.url===address&&storedViewport&&frozenVersion
+        ?{sourceId:initialRecord.id,versionId:frozenVersion,captureId,viewportId:storedViewport.id}:undefined;
+      previewWebsite(restored?{restored}:{address});
+    });
+    return ()=>{cancelled=true;};
+  },[activePanel,source,busy,referenceToLocate]);
+  const changeWebsiteSize=viewport=>{
+    setCustomSize(null);
+    if(viewport.width===Number(width)&&viewport.height===Number(height))return;
+    setWidth(viewport.width);setHeight(viewport.height);setViewportsText('');
+    if(websitePreview||websitePhase==='failed')return previewWebsite({address:url,viewport});
+  };
+  const sizePreset=Object.keys(websiteSizes).find(key=>websiteSizes[key].width===Number(width)&&websiteSizes[key].height===Number(height))||'sized';
+  const navigateWebsite=offset=>{
+    const index=websiteHistory.index+offset,address=websiteHistory.entries[index];
+    if(address)return previewWebsite({address,historyIndex:index});
+  };
+  const refreshWebsite=()=>previewWebsite({address:websiteHistory.entries[websiteHistory.index]||url,historyIndex:websiteHistory.index});
+  const inspectConnection=async()=>{const provider=source,owner=ownerRef.current;setError(null);setConnection({provider,status:'checking'});try{const response=await api('connection.status',{}),items=Array.isArray(response)?response:response?.connections;if(!Array.isArray(items))throw errorValue('连接服务没有返回配置状态，请重试。','CONNECTION_STATUS_INVALID');if(!mounted.current||owner!==ownerRef.current)return;const entry=items.find(item=>item.provider===provider)||{provider,configured:false};setConnection({...entry,status:entry.configured?'configured':'unconfigured'});}catch(error){if(mounted.current&&owner===ownerRef.current){setConnection({provider,status:'failed'});setError(error);}}};
+  const importFile=async event=>{
+    const input=event.currentTarget||event.target,file=input.files?.[0];if(!file||busy||websiteBusy||fileImportRun.current)return;
+    const token={},owner=ownerRef.current;fileImportRun.current=token;const current=()=>mounted.current&&fileImportRun.current===token&&owner===ownerRef.current,failed=()=>{setFileImportPhase('failed');setError(previous=>previous||errorValue('导出资料未能读取，请检查文件和错误详情后重试。','SOURCE_FILE_IMPORT_FAILED'));};
+    setError(null);setFileImportPhase('planning');
+    try{
+      let id=recordRef.current?.kind==='files'?recordRef.current.id:null;
+      if(!id){const pin=!faithful?pinnedSourceBinding(await api('binding.resolve',{projectId:project.id,designId:design?.id})):null;if(!current())return;if(!faithful&&!pin)throw errorValue('离线资料按规范改版需要先绑定设计规范。','SYSTEM_REQUIRED');const planned=await work('plan',{kind:'files',name:file.name,viewports:[{id:'custom',width:Number(width),height:Number(height)}],mode:faithful?'faithful':'system-adaptation',...(pin?{systemId:pin.systemId,systemVersion:pin.version}:{})});if(!current())return;if(!planned?.source?.id){failed();return;}id=planned.source.id;}
+      const ticket={...sourceView.current,requestId:++requestSerial.current};setFileImportPhase('uploading');setBusy(true);
+      const uploaded=await uploadFile(api,file,{projectId:project.id,purpose:'asset',designId:design?.id,expectedRevision:revisionRef.current,name:file.name,mediaType:file.type||'application/octet-stream',type:'reference'});if(!current()||!sourceResponseCurrent(ticket,sourceView.current,requestSerial.current))return;
+      revisionRef.current=Math.max(revisionRef.current,uploaded.projectRevision||uploaded.project?.revision||0);setRevision(revisionRef.current);const filePath=uploaded.file?.path||uploaded.path;if(!filePath)throw errorValue('上传成功但没有返回可读取的资料路径，请重试。','SOURCE_FILE_PATH_REQUIRED');setPath(filePath);setFileImportPhase('reading');
+      const imported=await work('import',{sourceId:id,path:filePath,allowPartial:false});if(!current())return;if(!imported){failed();return;}requireSavedSourceResult(imported);const loaded=await work('read',{sourceId:id,versionId:imported.version.id});if(!current())return;if(!loaded){failed();return;}setFileImportPhase('saved');
+    }catch(error){if(current()){setError(error);setFileImportPhase('failed');}}
+    finally{if(fileImportRun.current===token){fileImportRun.current=null;setBusy(false);input.value='';}}
+  };
   const generate = async (rebuild = false) => {
     if (!frozenVersion) {
       setError(errorValue("\u5148\u91C7\u96C6\u6765\u6E90\u5E76\u9009\u62E9\u51BB\u7ED3\u7248\u672C", "SOURCE_VERSION_REQUIRED"));
@@ -278,44 +374,109 @@ function SourcePanel({ api, project, design, provider = "website", legacy = {}, 
   const savedReviewPages=state.savedPageIds||[];
   React.useEffect(()=>{setReviewPages([]);setReviewNote('');},[state.taskId,state.requestId]);
   React.useEffect(()=>{const latest=existing.find(item=>item.id===recordRef.current?.id);if(latest&&latest!==recordRef.current){recordRef.current=latest;setRecord(latest);}},[existing]);
-  const readyToReplicate=websitePreviewReady(websitePreview,{draftKey,sourceId,versionId:frozenVersion,captureId,seen:previewSeen,designId:design?.id});
+  const readyToReplicate=websitePreviewReady(websitePreview,{draftKey,sourceId,versionId:frozenVersion,captureId,seen:previewSeen});
   const markPreviewLoaded=preview=>{if(previewRef.current===preview){setPreviewSeen(true);setWebsitePhase('ready');}};
-  const websiteEntry=<section className="wb-stack" aria-label="网页复刻" aria-busy={websiteBusy}>
-    <form className="wb-row" onSubmit={event=>{event.preventDefault();previewWebsite();}}><label className="wb-grow">网页地址<input aria-label="网页地址" type="url" required placeholder="https://example.com" disabled={websiteBusy||busy} value={url} aria-invalid={websiteFieldError?.details?.field==='url'} onChange={event=>{const next=event.target.value;setPagesText(value=>value.trim()===url.trim()?'':value);setURL(next);setWebsitePreview(null);setPreviewSeen(false);setWebsitePhase('idle');setWebsiteFieldError(null);}}/></label><Button primary type="submit" disabled={websiteBusy||busy||!url.trim()}>{websiteBusy?'正在取得预览…':websitePreview?'重新预览':'预览网页'}</Button></form>
-    <FieldError error={websiteFieldError} context={websiteFieldError?.details?.field==='url'?'网页地址':'采集选项'}/>
-    {websiteBusy&&<p className="wb-muted" role="status">{{planning:'正在准备采集计划…',capturing:'正在通过浏览器采集网页与依赖资源…',reading:'正在读取已保存的冻结预览…'}[websitePhase]}</p>}
-    <section className="wb-stack" aria-label="复刻规范"><label className="wb-row"><input type="checkbox" checked={!faithful} disabled={websiteBusy||busy||bindingLoading||!binding&&faithful} onChange={event=>{fidelityChosen.current=true;setFaithful(!event.target.checked);}}/>按当前设计规范改版</label><p className="wb-muted">{bindingLoading?'正在读取当前设计稿的固定规范版本…':bindingProblem?'当前规范暂时无法读取，请重试。':binding?`目标已绑定 ${binding.name} · 固定 v${binding.version}；${faithful?'本次保留原网页样式':'本次按该版本改版'}`:'当前未绑定规范，可原样复刻，或先到设计设置中绑定固定版本。'}</p><Button disabled={websiteBusy||busy||bindingLoading} onClick={loadBinding}>刷新规范信息</Button><p className="wb-muted">{faithful?'忠实保留原网页的布局、文字和视觉样式。':'预览时会固定当前规范版本，再按该版本复刻。'} 更改地址、规范或高级采集选项后，需要重新预览。</p></section>
-    {websitePreview&&<section className="wb-stack" aria-label="浏览器冻结预览"><div className="wb-row"><strong className="wb-grow">{previewSeen?'已保存的冻结预览':'正在载入冻结预览…'}</strong><span className="wb-muted">{websitePreview.pin?`${websitePreview.pin.name} · v${websitePreview.pin.version}`:'忠实还原'}</span></div><p className="wb-muted" style={{overflowWrap:'anywhere'}}>{websitePreview.url}</p>
-      <div style={{height:440,maxHeight:'60vh',overflow:'auto',border:'1px solid var(--wb-divider)',borderRadius:10,background:'var(--wb-panel)'}}>{websitePreview.image?<img key={websitePreview.versionId+websitePreview.captureId} src={websitePreview.image} alt="浏览器采集并保存的网页冻结快照" onLoad={()=>markPreviewLoaded(websitePreview)} onError={()=>{if(previewRef.current===websitePreview){setPreviewSeen(false);setWebsitePhase('preview-error');}}} style={{display:'block',width:'100%',height:'auto'}}/>:<iframe key={websitePreview.versionId+websitePreview.captureId+':html'} title="已冻结的网页 HTML 预览" srcDoc={websitePreview.html} sandbox="" tabIndex={-1} onLoad={()=>markPreviewLoaded(websitePreview)} style={{width:Number(width),minWidth:'100%',height:Math.max(440,Number(height)),border:0,pointerEvents:'none'}}/>}</div>
-      {!websitePreview.image&&<p className="wb-muted">{websitePreview.hasScreenshot?'当前展示已保存的只读 HTML。':'此快照暂无可显示的截图，当前展示已保存的只读 HTML。'} 动态交互需在复刻后验证。</p>}
-      {websitePhase==='preview-error'&&<p className="wb-muted" role="status">冻结截图未能载入，可读取已保存的 HTML，或重新预览网页。</p>}{websitePreview.image&&<Button disabled={websiteBusy||busy} onClick={previewFrozenHTML}>查看只读冻结 HTML</Button>}
-      {websitePreview.resources?<div className="wb-row" aria-label="已落地资源摘要"><span>CSS {websitePreview.resources.styles.count}</span><span>图片 {websitePreview.resources.images.count}</span><span>字体 {websitePreview.resources.fonts.count}</span><span className="wb-muted">已保存 {websitePreview.resources.total.count} 个外部资源 · {Math.ceil(websitePreview.resources.total.bytes/1024)} KiB{websitePreview.resources.failedCount?` · ${websitePreview.resources.failedCount} 项失败`:''}</span></div>:<p className="wb-muted">此冻结快照尚未提供资源落地明细。</p>}
-      {(websitePreview.warnings.length>0||websitePreview.failures.length>0)&&<details><summary>采集提示与资源缺失</summary><ul>{[...websitePreview.warnings,...websitePreview.failures].map((item,index)=><li key={index} style={{overflowWrap:'anywhere'}}>{typeof item==='string'?item:item.message||item.code}</li>)}</ul></details>}
-      {websitePreview.draftKey!==draftKey&&<p className="wb-muted" role="status">采集选项或规范已改变，请重新预览后复刻。</p>}
-      <div className="wb-row"><Button primary disabled={websiteBusy||busy||!readyToReplicate||['requested','pending','running'].includes(state.generation)} onClick={replicateWebsite}>复刻到当前设计稿</Button><span className="wb-muted">目标：{design?.name||'请先选择设计稿'}</span></div>
-      {state.taskId&&<p className="wb-muted" role="status">复刻任务：{sourceStateLabel(state.generation||'unknown')} · 实际保存 {savedReviewPages.length} 页 · {sourceStateLabel(state.outputStatus||'none')}<Button disabled={busy||websiteBusy} onClick={()=>read()}>刷新实际状态</Button></p>}
-    </section>}
-  </section>;
-  const platformEntry=<section className="wb-stack" aria-label="设计平台连接说明"><strong>{source==='mastergo'?'MasterGo':'Figma'} 设计导入</strong><ol><li>在导入连接设置中配置官方连接和访问凭据，并确认该账号能访问目标文件。</li><li>填写完整设计文件链接，优先选择一个明确画板或节点，再读取官方提纲与资料。</li><li>连接未就绪时，可从原平台导出 HTML、结构 JSON 或含图片/字体/CSS 的 ZIP，在下方上传。只有图片时会保留视觉参考，不会声明已取得可编辑结构。</li></ol><div className="wb-row"><Button disabled={busy||websiteBusy} onClick={inspectConnection}>检查连接配置</Button>{ImportDialog&&<Button disabled={busy||websiteBusy} onClick={()=>setImportOpen(true)}>打开导入连接设置</Button>}</div>{connection?.provider===source&&<p className="wb-muted" role="status">{connection.configured?'已配置连接；文件访问与读取仍需实际操作确认。':'尚未配置访问凭据，请打开导入设置完成官方连接，或上传导出资料。'}</p>}</section>;
-  return <div className="wb-stack">{source==='website'&&websiteEntry}{['mastergo','figma'].includes(source)&&platformEntry}<details open={source!=='website'}><summary>{source==='website'?'高级选项、归档来源与结果核对':'来源范围、导出资料与结果核对'}</summary><fieldset disabled={websiteBusy} style={{border:0,padding:0,margin:'12px 0 0',minWidth:0}}><div className="wb-stack"><p className="wb-muted">数据取得、设计生成、视觉核对和交互验证分别记录。截图与平台资料作为冻结来源，生成结果须保存到目标设计稿。</p><div className="wb-row"><label className="wb-grow">已归档来源<select value={sourceId || ""} onChange={(e) => {
+  const replicaSaved=result?.page?.websiteCapture?.captureId===websitePreview?.captureId&&!!websitePreview;
+  const replicateWebsite=async()=>{
+    if(!readyToReplicate||busy||websiteBusy||websiteSubmission.current)return;
+    websiteSubmission.current=true;
+    try{
+      const saved=await work('replicate',{sourceId:websitePreview.sourceId,versionId:websitePreview.versionId,captureId:websitePreview.captureId});
+      if(saved?.page)onOpenReplica?.(saved.page,saved.design);
+    }finally{websiteSubmission.current=false;}
+  };
+  const websiteLoading=websiteBusy||(websitePhase==='ready'&&!!websitePreview&&!previewSeen);
+  const websiteEntry=<section className="wb-website-browser" aria-label="网页复刻" aria-busy={websiteLoading}>
+    <style>{websiteBrowserStyles}</style>
+    {recording?<WebsiteSession api={api} projectId={project.id} url={url} width={Number(width)} height={Number(height)}
+      onCancel={()=>setRecording(false)} onCapture={async(browserId,previousFingerprint)=>{
+        const saved=await api('workbench.source.capture',{projectId:project.id,sourceId,expectedRevision:revisionRef.current,browserId,recordCurrent:true,previousFingerprint});
+        revisionRef.current=Math.max(revisionRef.current,saved.projectRevision||0);
+        return saved;
+      }} onSave={async steps=>{
+        const saved=await work('replicate',{sourceId,versionId:steps[0].versionId,captureId:steps[0].captureId,recording:steps});
+        if(!saved?.page)throw new Error('录制尚未保存，请重试');
+        setRecording(false);onOpenReplica?.(saved.page,saved.design);
+      }}/>:<>
+    <form className="wb-website-address" onSubmit={event=>{event.preventDefault();previewWebsite({address:event.currentTarget.elements.namedItem('websiteURL').value});}}>
+      <div className="wb-website-navigation" role="group" aria-label="网页导航">
+        <Button aria-label="后退" title="后退" disabled={websiteBusy||busy||websiteHistory.index<=0} onClick={()=>navigateWebsite(-1)}><Icon name="arrow-left" size={15}/></Button>
+        <Button aria-label="前进" title="前进" disabled={websiteBusy||busy||websiteHistory.index>=websiteHistory.entries.length-1} onClick={()=>navigateWebsite(1)}><Icon name="arrow-right" size={15}/></Button>
+        <Button aria-label="刷新网页" title="刷新" disabled={websiteBusy||busy||!url.trim()} onClick={refreshWebsite}><Icon name="refresh" size={15}/></Button>
+      </div>
+      <input aria-label="网页地址" name="websiteURL" type="text" inputMode="url" autoCapitalize="none" spellCheck={false} placeholder="输入网址，按 Enter 打开" disabled={websiteBusy||busy} value={url}
+        onPaste={event=>{
+          const input=event.currentTarget;
+          if(input.selectionStart!==0||input.selectionEnd!==input.value.length)return;
+          const pasted=event.clipboardData.getData('text').trim();
+          if(!/^https?:\/\//i.test(pasted))return;
+          event.preventDefault();previewWebsite({address:pasted});
+        }}
+        aria-invalid={websiteFieldError?.details?.field==='url'} onChange={event=>{
+          setURL(event.target.value);setPagesText('');setStatesText('');setRegionsText('');setViewportsText('');setCaptureScope('page');
+          setError(null);setWebsitePreview(null);setPreviewSeen(false);setWebsitePhase('idle');setWebsiteFieldError(null);
+        }}/>
+      <ProjectGroupSelect className="wb-website-size" label="网页预览尺寸" ariaLabel="网页预览尺寸"
+        disabled={websiteBusy||busy} value={sizePreset==='sized'?'custom':sizePreset}
+        options={[
+          ...Object.entries(websiteSizes).map(([id,size])=>viewportOption(id,id==='web'?'Web':'Mobile',id==='web'?'monitor':'phone',size.width+' × '+size.height)),
+          viewportOption('custom','自定义尺寸','fit',sizePreset==='sized'?width+' × '+height:null)
+        ]}
+        onChange={id=>{if(id==='custom')setCustomSize({width,height});else changeWebsiteSize(websiteSizes[id]);}}/>
+      <Button disabled={!readyToReplicate||busy||websiteBusy} onClick={()=>setRecording(true)}>录制交互</Button>
+      <Button primary title={readyToReplicate?'将当前网页复刻到设计稿':'输入网址并按 Enter，网页加载完成后即可复刻'} disabled={websiteBusy||busy||!readyToReplicate} onClick={replicateWebsite}>{busy&&websiteSubmission.current?'复刻中…':replicaSaved?'打开复刻稿':'开始复刻'}</Button>
+      {websiteLoading&&<div className="wb-website-progress" role="progressbar" aria-label="网页加载中"/>}
+    </form>
+    {customSize&&<Modal className="wb-viewport-dialog" title="自定义视口尺寸" onClose={()=>setCustomSize(null)}>
+      <form className="wb-form" onSubmit={event=>{
+        event.preventDefault();changeWebsiteSize({width:Number(customSize.width),height:Number(customSize.height)});
+      }}>
+        <div className="wb-viewport-fields">
+          {[['width','宽度'],['height','高度']].map(([field,label])=><label key={field}>
+            {label}<span className="wb-viewport-number">
+              <input type="number" aria-label={label} data-modal-initial-focus={field==='width'?true:undefined}
+                min={240} max={3840} step={1} required value={customSize[field]}
+                onChange={event=>setCustomSize({...customSize,[field]:event.target.value})}/>
+              <span aria-hidden="true">px</span>
+            </span>
+          </label>)}
+        </div>
+        <footer><Button onClick={()=>setCustomSize(null)}>取消</Button><Button primary type="submit">应用尺寸</Button></footer>
+      </form>
+    </Modal>}
+    <FieldError error={websiteFieldError} context="网页地址"/>
+    <div className="wb-website-viewport">
+      {websitePreview ? <WebsitePreviewFrame key={websitePreview.captureId} preview={websitePreview}
+        onLoad={()=>markPreviewLoaded(websitePreview)} onError={()=>{setPreviewSeen(false);setWebsitePhase('preview-error');}}/>
+        : websitePhase==='failed'?<div className="wb-website-empty" role="status"><h2>网页未能加载</h2><Button disabled={busy} onClick={refreshWebsite}>重新加载</Button></div>
+        : !websiteBusy&&<div className="wb-website-empty">
+          <svg className="wb-website-empty-art" width="240" height="160" viewBox="0 0 240 160" fill="none" aria-hidden="true" focusable="false">
+            <rect className="wb-website-empty-window" x="24" y="12" width="192" height="128" rx="14" fill="var(--wb-panel)"/>
+            <rect x="38" y="26" width="18" height="6" rx="3" fill="var(--wb-brand-ink)" opacity=".75"/>
+            <rect x="64" y="26" width="116" height="6" rx="3" fill="var(--wb-muted)" opacity=".09"/>
+            <rect x="40" y="52" width="78" height="8" rx="4" fill="var(--wb-text)" opacity=".18"/>
+            <rect x="40" y="68" width="102" height="5" rx="2.5" fill="var(--wb-muted)" opacity=".1"/>
+            <rect x="40" y="87" width="72" height="36" rx="6" fill="var(--wb-brand-ink)" opacity=".05"/>
+            <rect x="120" y="87" width="78" height="36" rx="6" fill="var(--wb-muted)" opacity=".04"/>
+            <rect x="154" y="51" width="42" height="24" rx="6" fill="var(--wb-brand-ink)" opacity=".1"/>
+            <circle cx="207" cy="125" r="18" fill="var(--wb-brand-ink)"/>
+            <path d="M207 133v-16m-6 6 6-6 6 6" stroke="white" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          <h2>从一个网址开始</h2>
+          <p>在上方粘贴链接，按 <kbd>Enter</kbd> 打开网页</p>
+        </div>}
+    </div>
+  </>}</section>;
+  const exportUpload=<section className="wb-stack" aria-label="离线导出资料"><label>上传并读取导出资料（HTML / JSON / ZIP / 图片）<input type="file" accept=".html,.htm,.json,.zip,.png,.jpg,.jpeg,.webp" disabled={busy||websiteBusy||fileImportBusy} onChange={importFile}/></label><p className="wb-muted">可直接选择文件，无需在线链接或平台账号。资料会保存为离线来源，图片单独导入时仅提供视觉参考。</p>{fileImportPhase!=='idle'&&<p role="status">{{planning:'正在准备离线来源…',uploading:'正在上传导出资料…',reading:'正在读取并保存冻结资料…',saved:'离线资料已保存，可在下方选择冻结版本、核对预览或生成可编辑设计。',failed:'导出资料读取未完成，请检查文件或错误详情后重新选择。'}[fileImportPhase]}</p>}</section>;
+  const platformEntry=<section className="wb-stack" aria-label="设计平台连接说明"><strong>{source==='mastergo'?'MasterGo':'Figma'} 设计导入</strong><ol><li>在导入连接设置中配置官方连接和访问凭据，并确认该账号能访问目标文件。</li><li>填写完整设计文件链接，优先选择一个明确画板或节点，再读取官方提纲与资料。</li><li>连接未就绪时，可从原平台导出 HTML、结构 JSON 或含图片/字体/CSS 的 ZIP，在下方上传。只有图片时会保留视觉参考，不会声明已取得可编辑结构。</li></ol><div className="wb-row"><Button disabled={busy||websiteBusy||connection?.provider===source&&connection.status==='checking'} onClick={inspectConnection}>检查连接配置</Button>{ImportDialog&&<Button disabled={busy||websiteBusy} onClick={()=>setImportOpen(true)}>打开导入连接设置</Button>}</div>{connection?.provider===source&&<p className="wb-muted" role="status">{connection.status==='checking'?'正在检查连接配置…':connection.status==='failed'?'连接配置检查未完成。请查看错误详情、在导入设置中检查官方连接，或直接上传导出资料。':connection.configured?'已配置连接；文件访问与读取仍需实际操作确认。':'尚未配置访问凭据，请打开导入设置完成官方连接，或直接上传导出资料。'}</p>}</section>;
+  return <div className="wb-stack wb-source-panel" data-provider={source}><ErrorBox error={error} context="来源操作"/>{source==='website'&&websiteEntry}{['mastergo','figma'].includes(source)&&platformEntry}{source!=='website'&&exportUpload}{source!=='website'&&<details open><summary>{source==='website'?'高级选项、归档来源与结果核对':'来源范围、导出资料与结果核对'}</summary><fieldset disabled={websiteBusy||fileImportBusy} style={{border:0,padding:0,margin:'12px 0 0',minWidth:0}}><div className="wb-stack"><p className="wb-muted">数据取得、设计生成、视觉核对和交互验证分别记录。截图与平台资料作为冻结来源，生成结果须保存到目标设计稿。</p><div className="wb-row"><label className="wb-grow">已归档来源<select value={sourceId || ""} onChange={(e) => {
     chooseSource(selectSourceRecord(existing,e.target.value),{force:true});
   }}><option value="">新建来源…</option>{existing.map((s) => <option key={s.id} value={s.id}>{s.name} · {s.kind}</option>)}{record && !existing.some((s) => s.id === sourceId) && <option value={sourceId}>{record.name}</option>}</select></label>{sourceId && <Button onClick={() => read()}>读取来源记录</Button>}</div><div className="wb-operation-grid"><label>来源类型<select value={source} onChange={(e) => {
     chooseSource(null,{force:true});applyForm(hydrateSourceForm(null,e.target.value));
-  }}>{[["website", "\u7F51\u7AD9"], ["mastergo", "MasterGo"], ["figma", "Figma"], ["files", "\u5BFC\u51FA HTML / JSON / \u8D44\u6E90\u5305"]].map(([id, n]) => <option key={id} value={id}>{n}</option>)}</select></label><label>还原策略<select value={faithful ? "faithful" : "system-adaptation"} onChange={(e) => {fidelityChosen.current=true;setFaithful(e.target.value === "faithful");}}><option value="faithful">忠实还原（不套用体系）</option><option value="system-adaptation">明确按当前体系改版</option></select></label></div><label>来源名称<input value={name} onChange={(e) => setName(e.target.value)} /></label><label>设计 / 网站链接<input value={url} onChange={(e) => setURL(e.target.value)} placeholder="https://…" /></label><details><summary>多页面、状态操作与自定义视口</summary><div className="wb-stack"><label>多页面链接（每行一个）<textarea rows={3} value={pagesText} onChange={(e) => setPagesText(e.target.value)} /></label><label>状态操作 JSON（可选，states 数组）<textarea rows={4} value={statesText} onChange={(e) => setStatesText(e.target.value)} placeholder={'[{"name":"\u83DC\u5355\u5C55\u5F00","actions":[{"type":"click","selector":"button.menu"}]}]'} /></label><label>采集范围<select value={captureScope} onChange={(e) => setCaptureScope(e.target.value)}><option value="page">整页</option><option value="regions">仅指定区域</option></select></label><label>区域 JSON（真实 nodeIds 或 rect）<textarea rows={3} value={regionsText} onChange={(e) => setRegionsText(e.target.value)} placeholder={'[{"name":"\u9996\u5C4F","rect":{"x":0,"y":0,"width":1440,"height":900}}]'} /></label><label>多个视口 JSON（留空使用下方宽高）<textarea rows={3} value={viewportsText} onChange={(e) => setViewportsText(e.target.value)} placeholder={'[{"id":"desktop","width":1440,"height":900},{"id":"mobile","width":390,"height":844}]'} /></label></div></details><div className="wb-row"><label>宽度<input type="number" min={240} max={3840} value={width} onChange={(e) => setWidth(e.target.value)} /></label><label>高度<input type="number" min={240} max={3840} value={height} onChange={(e) => setHeight(e.target.value)} /></label><Button primary disabled={busy} onClick={startPlan}>创建来源采集计划</Button>{ImportDialog && <Button onClick={() => setImportOpen(true)}>连接设置 / 浏览器</Button>}</div><ErrorBox error={error} />{sourceId && <><h3>选择文件、页面、画板或节点</h3>{pageItems.map((n, i) => {
+  }}>{[["website", "\u7F51\u7AD9"], ["mastergo", "MasterGo"], ["figma", "Figma"], ["files", "\u5BFC\u51FA HTML / JSON / \u8D44\u6E90\u5305"]].map(([id, n]) => <option key={id} value={id}>{n}</option>)}</select></label><label>还原策略<select value={faithful ? "faithful" : "system-adaptation"} onChange={(e) => {fidelityChosen.current=true;setFaithful(e.target.value === "faithful");}}><option value="faithful">忠实还原（不套用体系）</option><option value="system-adaptation">明确按当前体系改版</option></select></label></div><label>来源名称<input value={name} onChange={(e) => setName(e.target.value)} /></label><label>设计 / 网站链接<input value={url} onChange={(e) => {setURL(e.target.value);setError(null);}} placeholder="https://…" /></label><details><summary>多页面、状态操作与自定义视口</summary><div className="wb-stack"><label>多页面链接（每行一个）<textarea rows={3} value={pagesText} onChange={(e) => setPagesText(e.target.value)} /></label><label>状态操作 JSON（可选，states 数组）<textarea rows={4} value={statesText} onChange={(e) => setStatesText(e.target.value)} placeholder={'[{"name":"\u83DC\u5355\u5C55\u5F00","actions":[{"type":"click","selector":"button.menu"}]}]'} /></label><label>采集范围<select value={captureScope} onChange={(e) => setCaptureScope(e.target.value)}><option value="page">整页</option><option value="regions">仅指定区域</option></select></label><label>区域 JSON（真实 nodeIds 或 rect）<textarea rows={3} value={regionsText} onChange={(e) => setRegionsText(e.target.value)} placeholder={'[{"name":"\u9996\u5C4F","rect":{"x":0,"y":0,"width":1440,"height":900}}]'} /></label><label>多个视口 JSON（留空使用下方宽高）<textarea rows={3} value={viewportsText} onChange={(e) => setViewportsText(e.target.value)} placeholder={'[{"id":"desktop","width":1440,"height":900},{"id":"mobile","width":390,"height":844}]'} /></label></div></details><div className="wb-row"><label>宽度<input type="number" min={240} max={3840} value={width} onChange={(e) => setWidth(e.target.value)} /></label><label>高度<input type="number" min={240} max={3840} value={height} onChange={(e) => setHeight(e.target.value)} /></label><Button primary disabled={busy} onClick={startPlan}>创建来源采集计划</Button>{ImportDialog && <Button onClick={() => setImportOpen(true)}>连接设置 / 浏览器</Button>}</div>{sourceId && <><h3>选择文件、页面、画板或节点</h3>{pageItems.map((n, i) => {
     const id = n.sourceNodeId || n.id || n.nodeId || String(i);
     return <label key={id} className="wb-row"><input type="checkbox" disabled={busy||record?.kind!=='website'&&selectionMode==='nodes'} checked={selected.includes(id)} onChange={(e) => setSelected((s) => e.target.checked ? [...s, id] : s.filter((v) => v !== id))} /><span>{n.name || n.tag || id}</span></label>;
-  })}{['figma','mastergo'].includes(record?.kind)&&<><label>保存范围<select disabled={busy} value={selectionMode} onChange={event=>setSelectionMode(event.target.value)}><option value="pages">上方已归档页面</option><option value="nodes">下方所选页面、画板或节点</option></select></label><Button disabled={busy} onClick={()=>work('discover',{sourceId,offset:0,limit:200})}>读取官方文件提纲</Button>{discovery&&discovery.status!=='available'&&<p className="wb-message">{discovery.reason||discovery.error?.message||'当前官方连接不能提供文件提纲。可填写明确节点链接，或导入导出资料。'}</p>}</>}{record?.kind==='website'&&<p className="wb-muted">下方节点作为所选网页的区域，保留原页面、状态和视口。重新采集会验证这些来源对象仍存在。</p>}<SourceOutline groups={outline} website={record?.kind==='website'} selected={nodeSelection} disabled={busy||record?.kind!=='website'&&selectionMode!=='nodes'} pages={pageItems} captureId={captureId} onSelect={(id,checked)=>setNodeSelection(previous=>checked?[...new Set([...previous,id])]:previous.filter(item=>item!==id))} onLoadMore={loadMoreOutline}/><div className="wb-row"><Button disabled={busy} onClick={saveSelection}>保存所选页面 / 节点范围</Button><Button disabled={busy} onClick={capture}>{source === "website" ? "\u91C7\u96C6\u9875\u9762\u548C\u72B6\u6001" : "\u8BFB\u53D6\u5E73\u53F0\u8D44\u6599 / \u5BFC\u51FA\u6587\u4EF6"}</Button></div><label>导入平台导出资料（HTML / JSON / ZIP / 图片）<input type="file" accept=".html,.htm,.json,.zip,.png,.jpg,.jpeg,.webp" disabled={busy} onChange={async (e) => {
-    const file=e.target.files[0];if(!file)return;
-    const ticket={...sourceView.current,requestId:++requestSerial.current};
-    setBusy(true);
-    setError(null);
-    try {
-      const r = await uploadFile(api, file, { projectId: project.id, purpose: "asset", designId: design?.id, expectedRevision: revisionRef.current, name: file.name, mediaType: file.type || "application/octet-stream", type: "reference" });
-      revisionRef.current=Math.max(revisionRef.current,r.projectRevision||r.project?.revision||0);setRevision(revisionRef.current);
-      if(sourceResponseCurrent(ticket,sourceView.current,requestSerial.current)){setPath(r.file?.path||r.path);setResult(r);}
-    }catch(error){if(sourceResponseCurrent(ticket,sourceView.current,requestSerial.current))setError(error);}
-    finally{if(sourceResponseCurrent(ticket,sourceView.current,requestSerial.current)){setBusy(false);e.target.value='';}}
-  }} /></label><label>备用导出资料路径（官方连接不可用时）<input value={path} onChange={(e) => setPath(e.target.value)} placeholder="已通过文件资源导入的 HTML / JSON / ZIP / 图片路径" /></label><div className="wb-operation-grid"><label>冻结来源版本<select value={frozenVersion || ""} onChange={e=>{focusSource(sourceId,{versionId:e.target.value});work('read',{sourceId,versionId:e.target.value});}}><option value="">先采集来源</option>{record?.versions?.map((v) => <option key={v.id} value={v.id}>{v.id} · {v.createdAt}</option>)}{frozenVersion && !record?.versions?.some((v) => v.id === frozenVersion) && <option value={frozenVersion}>{frozenVersion}</option>}</select></label><label>来源快照<select value={captureId} onChange={(e) => {
+  })}{['figma','mastergo'].includes(record?.kind)&&<><label>保存范围<select disabled={busy} value={selectionMode} onChange={event=>setSelectionMode(event.target.value)}><option value="pages">上方已归档页面</option><option value="nodes">下方所选页面、画板或节点</option></select></label><Button disabled={busy} onClick={()=>work('discover',{sourceId,offset:0,limit:200})}>读取官方文件提纲</Button>{discovery&&discovery.status!=='available'&&<p className="wb-message">{discovery.reason||discovery.error?.message||'当前官方连接不能提供文件提纲。可填写明确节点链接，或导入导出资料。'}</p>}</>}{record?.kind==='website'&&<p className="wb-muted">下方节点作为所选网页的区域，保留原页面、状态和视口。重新采集会验证这些来源对象仍存在。</p>}<SourceOutline groups={outline} website={record?.kind==='website'} selected={nodeSelection} disabled={busy||record?.kind!=='website'&&selectionMode!=='nodes'} pages={pageItems} captureId={captureId} onSelect={(id,checked)=>setNodeSelection(previous=>checked?[...new Set([...previous,id])]:previous.filter(item=>item!==id))} onLoadMore={loadMoreOutline}/><div className="wb-row"><Button disabled={busy} onClick={saveSelection}>保存所选页面 / 节点范围</Button><Button disabled={busy} onClick={capture}>{source === "website" ? "\u91C7\u96C6\u9875\u9762\u548C\u72B6\u6001" : "\u8BFB\u53D6\u5E73\u53F0\u8D44\u6599 / \u5BFC\u51FA\u6587\u4EF6"}</Button></div>{source==='website'&&exportUpload}<label>备用导出资料路径（官方连接不可用时）<input value={path} onChange={(e) => setPath(e.target.value)} placeholder="已通过文件资源导入的 HTML / JSON / ZIP / 图片路径" /></label><div className="wb-operation-grid"><label>冻结来源版本<select value={frozenVersion || ""} onChange={e=>{focusSource(sourceId,{versionId:e.target.value});work('read',{sourceId,versionId:e.target.value});}}><option value="">先采集来源</option>{record?.versions?.map((v) => <option key={v.id} value={v.id}>{v.id} · {v.createdAt}</option>)}{frozenVersion && !record?.versions?.some((v) => v.id === frozenVersion) && <option value={frozenVersion}>{frozenVersion}</option>}</select></label><label>来源快照<select value={captureId} onChange={(e) => {
     sourceView.current=sourceViewTransition(sourceView.current,sourceId);requestSerial.current++;setBusy(false);
     setCaptureId(e.target.value);
     const c = version?.captures?.find((c2) => c2.id === e.target.value), v = record?.viewports?.find((v2) => v2.id === c?.viewportId);
@@ -331,7 +492,7 @@ function SourcePanel({ api, project, design, provider = "website", legacy = {}, 
     if (r) setRefresh(null);
   }}>确认应用所提差异</Button>}</div>}{refresh && <pre>{JSON.stringify(refresh, null, 2)}</pre>}{result && <details><summary>来源证据与业务结果</summary><pre>{JSON.stringify(result, null, 2)}</pre></details>}{importOpen && ImportDialog && <ImportDialog project={project} t={(key) => ({ importRead: "\u8BFB\u53D6\u5E76\u4FDD\u5B58\u6765\u6E90\u8D44\u6599", importCapture: "\u6355\u83B7\u6765\u6E90\uFF08\u4E0D\u521B\u5EFA\u9875\u9762\uFF09", importDone: "\u6765\u6E90\u8D44\u6599\u5DF2\u4FDD\u5B58\uFF0C\u8FD4\u56DE\u540E\u751F\u6210\u53EF\u7F16\u8F91\u8BBE\u8BA1" })[key] || (t ? t(key) : key)} initialTab={source === "website" ? "web" : "design"} initialProvider={source === "mastergo" ? "mastergo" : "figma"} initialURL={url} initialName={name} onClose={() => setImportOpen(false)} onImported={async (r) => {
     if(!r?.uiViewIgnored&&r?.source?.id===sourceView.current.sourceId)setResult(r);
-  }} />}</div></fieldset></details></div>;
+  }} />}</div></fieldset></details>}</div>;
 }
 export {
   SourcePanel as default

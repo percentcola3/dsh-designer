@@ -6,8 +6,29 @@ import {normalizeDocument,applyDocumentOperations} from './document-model.js';
 import {FrameworkService} from './framework-service.js';
 import {normalizeFrameworkSource,replaceSourceElement} from './framework-compiler.js';
 import {sourceTemplateConfirmation} from './ui/target-state.js';
+import {systemTextMatches,systemUsage} from './system-usage.js';
+import {desktopComponentManifest,desktopSystemFiles} from './desktop-theme.js';
 
 const digest=s=>createHash('sha256').update(s).digest('hex');
+
+test('pinned desktop usage supplies bounded public integration recipes and preserves custom contracts',()=>{
+  const files=Object.fromEntries(desktopSystemFiles().map(file=>[file.logicalPath,file.content]));
+  const requested=['ds-button','ds-input','ds-textarea','ds-select','ds-tag','ds-tabs'];
+  const usage=systemUsage({manifest:desktopComponentManifest,tokens:JSON.parse(files['tokens.json']),examples:files['examples/components.html'],components:requested});
+  assert.ok(JSON.stringify(usage).length<12000);
+  assert.match(usage.startup,/DOMContentLoaded/);
+  const tabs=usage.components.find(component=>component.tag==='ds-tabs');
+  assert.match(tabs.integration.example,/data-tab-list/);
+  assert.match(tabs.integration.events,/detail.value/);
+  const controls=systemUsage({manifest:desktopComponentManifest,components:['ds-dialog','ds-toast'],includeTokens:false});
+  assert.equal(controls.tokens,undefined);
+  assert.match(controls.components[0].integration.close,/data-ds-close/);
+  assert.match(controls.components[1].integration.scene,/duration/);
+  const own=systemUsage({manifest:{...desktopComponentManifest,components:[{tag:'ds-tabs',integration:{write:'custom API'}}]},components:['ds-tabs']});
+  assert.deepEqual(own.components[0].integration,{write:'custom API'});
+  const other=systemUsage({manifest:{...desktopComponentManifest,name:'Other kit'},components:['ds-tabs']});
+  assert.equal(other.components[0].integration,undefined);
+});
 const html='<!doctype html><html data-dsh-node="html"><head><title>Shop</title><style>.card{color:red}</style></head><body data-dsh-node="body"><main data-dsh-node="main"><section data-dsh-node="a"><button data-dsh-node="button">Buy</button><p data-dsh-node="text">A</p></section><aside data-dsh-node="b">B</aside></main></body></html>';
 const normalized=()=>normalizeDocument(html).html;
 const selection={projectId:'p-one',designId:'d-one',pageId:'a-one',pageIds:['a-one'],nodeIds:['a'],scope:'selection',designIds:['d-one']};
@@ -20,6 +41,35 @@ function fixture(){
   const owner={bindings:new Map([['designer-p-one','p-one']]),ctx:{fileUploads:{async upload(agent,input){calls.push({upload:input,agent:agent.id});return {receiptId:'receipt-one'}}}},store:{async read(relative,_signal,optional=false){if(!savedFiles.has(relative)){if(optional)return null;throw Object.assign(new Error('missing'),{code:'NOT_FOUND'});}return {content:savedFiles.get(relative),version:'stored-1'}},async write(relative,content,previous,_signal,policy){if(policy?.mode==='read-only')throw Object.assign(new Error('policy'),{code:'FS_SANDBOX_DENIED'});if(savedFiles.has(relative)&&previous===null)throw Object.assign(new Error('existing'),{code:'VERSION_CONFLICT'});savedFiles.set(relative,content);return 'stored-1'},async projectGet(id){assert.equal(id,'p-one');return {project}},async artboardGet(pid,id){assert.equal(pid,'p-one');return pages.get(id)}},workbench:{async execute(input){calls.push(input);switch(input.action){case 'binding.resolve':return binding;case 'file.read':{const data=input.path==='rules.md'?'latest rules':requirements,offset=input.offset||0,part=Buffer.from(data).subarray(offset).toString('utf8').slice(0,input.limit||5000),next=offset+Buffer.byteLength(part),total=Buffer.byteLength(data);return {fileId:input.path==='rules.md'?'file-rules':'file-requirements',path:input.path,mimeType:'text/plain',text:part,version:fileVersion,total,nextOffset:next<total?next:null};}case 'reference.resolve':if(input.reference.projectId&&input.reference.projectId!=='p-one')throw Object.assign(new Error('foreign'),{code:'PROJECT_SCOPE'});if(missing)throw Object.assign(new Error('gone'),{code:'REFERENCE_NOT_FOUND'});if(input.reference.sourceVersion!==undefined&&input.reference.sourceVersion!==resolvedVersion)throw Object.assign(new Error('changed'),{code:'REFERENCE_VERSION_CONFLICT'});return {resourceId:input.reference.pageId||input.reference.fileId,page:pages.get('a-one').artboard,sourceVersion:resolvedVersion,resolved:true,...(input.reference.nodeId?{node:{id:input.reference.nodeId}}:{})};default:throw Error(input.action)}}}};
   const ai=new AIWorkbench(owner);return {ai,owner,project,pages,calls,savedFiles,setBinding:v=>binding=v,setMissing:v=>missing=v,setVersion:v=>resolvedVersion=v,setRequirements:v=>requirements=v,setFileVersion:v=>fileVersion=v};
 }
+test('single admitted page reads infer the exact target while explicit and multi-page choices remain authoritative',async()=>{
+  const f=fixture(),agent={id:'designer-p-one'},calls=[];
+  f.ai.setTask(agent,{...selection,scope:'design'});
+  f.ai.scopedPolicy=async()=>({mode:'workspace-write',workspaceRoot:'/workspace'});
+  f.owner.execute=async input=>{calls.push(input);return {pageId:input.pageId};};
+  const tool=f.ai.scopedTool(agent,'p-one');
+  await tool.execute({action:'edit.read',options:{view:'source'}},{});
+  assert.equal(calls.at(-1).pageId,'a-one');
+  await tool.execute({action:'edit.read',options:{pageId:'a-two'}},{});
+  assert.equal(calls.at(-1).pageId,'a-two');
+  f.ai.setTask(agent,{...selection,scope:'design',pageIds:['a-one','a-two']});
+  await tool.execute({action:'edit.read',options:{}},{});
+  assert.equal(calls.at(-1).pageId,undefined);
+});
+test('misplaced public resource read arguments retain scope checks and nested precedence',async()=>{
+  const f=fixture(),agent={id:'designer-p-one'},received=[];
+  f.ai.setTask(agent,{...selection,scope:'design'});
+  f.ai.scopedPolicy=async()=>({mode:'workspace-write',workspaceRoot:'/workspace'});
+  const execute=f.ai.execute;
+  f.ai.execute=async input=>{received.push(input);return {readonly:true};};
+  const tool=f.ai.scopedTool(agent,'p-one');
+  await tool.execute({action:'context.read',projectId:'foreign',resourceId:'binding-design:d-one',path:'components.js',query:'observe',contextLines:3,options:{query:'ds-tabs'}},{});
+  assert.equal(received[0].projectId,'p-one');
+  assert.equal(received[0].path,'components.js');
+  assert.equal(received[0].query,'ds-tabs');
+  assert.equal(received[0].contextLines,3);
+  f.ai.execute=execute;
+  await assert.rejects(tool.execute({action:'context.read',resourceId:'unadmitted',path:'rule.md'},{}),error=>error.message==='Resource is not in this task. Add it as a user reference first');
+});
 test('generic model reads and writes reject sensitive files at every monorepo depth',async()=>{
   const task={...selection,scope:'read'},sensitive=['.env','apps/web/.env','apps/web/.env.local','apps/web/.npmrc','apps/web/.netrc','apps/web/node_modules/pkg/index.js','apps/.workbench/state.json'];
   for(const path of sensitive){
@@ -88,7 +138,18 @@ test('domain: native lifecycle correlates the exact RPC to its containing turn a
   events.push({type:'turn/start',seq:6,data:{turn:11}},{type:'user/message',seq:7,data:{source:{kind:'user',rpcId:'rpc-two'}}},{type:'turn/end',seq:8,data:{turn:11,reason:{kind:'completed'}}});assert.equal((await f.ai.requestLifecycle(request)).generation,'unknown');assert.equal((await f.ai.requestLifecycle({...request,requestId:'rpc-missing'})).generation,'unknown');
 });
 test('domain: source review remains user-only through nested workbench aliases',()=>{for(const action of ['source.review','workbench.source.review'])code(()=>assertAction({action,projectId:'p-one',options:{user:true}},{task:selection,user:true,agent:{id:'designer-p-one'}}),'USER_ONLY');});
-test('tool schema stays compact and help discovers bounded resource reads',()=>{const f=fixture(),tool=f.ai.scopedTool({id:'designer-p-one'},'p-one');assert.ok(JSON.stringify(tool.parameters).length<1000);assert.ok(f.ai.help().actions.some(a=>a.action==='context.read'));assert.ok(f.ai.help('context.read').fields.includes('12000'));});
+test('tool schema stays compact and help discovers bounded resource reads',()=>{const f=fixture(),tool=f.ai.scopedTool({id:'designer-p-one'},'p-one');assert.ok(JSON.stringify(tool.parameters).length<2000);assert.ok(f.ai.help().actions.some(a=>a.action==='context.read'));assert.ok(f.ai.help('context.read').fields.includes('12000'));});
+
+test('scoped help starts with the compact task directory and retains exact action help',async()=>{
+  const f=fixture(),agent={id:'designer-p-one'};f.ai.setTask(agent,selection);
+  f.ai.scopedPolicy=async()=>({mode:'workspace-write',workspaceRoot:'/workspace'});
+  const tool=f.ai.scopedTool(agent,'p-one');let detailed=0;
+  f.owner.actionHelp=(topic)=>{detailed++;return {action:topic,fields:{pageId:'required'}};};
+  const index=await tool.execute({action:'help'},{});
+  assert.ok(index.actions.some(row=>row.action==='edit.read'));assert.equal(detailed,0);
+  assert.deepEqual(await tool.execute({action:'help',options:{action:'edit.read'}},{}),{action:'edit.read',fields:{pageId:'required'}});
+  assert.equal(detailed,1);
+});
 
 function frameworkFixture({kind='react',bothFiles=false,sourceRoot}={}) {
   const f=fixture(),design=f.project.workbench.designs[0],page=f.project.artboards[0];
@@ -116,13 +177,14 @@ function frameworkFixture({kind='react',bothFiles=false,sourceRoot}={}) {
 
 test('framework picks freeze verified source IDs while retaining complete runtime evidence and required template acknowledgement',async()=>{
   const f=frameworkFixture(),input=f.request();
+  input.selection.objects.forEach((object,index)=>object.selectionLabel=['A','C'][index]);
   await assert.rejects(f.ai.prepare({...input,target:{...input.target,sourceTemplateConfirmed:undefined}},{user:true}),error=>error.code==='SOURCE_TEMPLATE_CONFIRMATION_REQUIRED');
   const prepared=await f.ai.prepare(input,{user:true}),task=prepared.task,target=task.framework.sourceTargets[0];
   assert.equal(task.scope,'selection');assert.deepEqual(task.nodeIds,['source-button']);assert.deepEqual(target.instanceIds,['runtime-1','runtime-2']);assert.equal(target.instanceCount,2);
   assert.equal(target.element,f.picked.objects[0].outerHTML);assert.ok(target.element.length>12000);assert.equal(target.sourceCode,f.files[f.paths[0]]);assert.ok(target.sourceElement.includes('onClick'));assert.ok(target.sourceElement.includes('{item}'));
   assert.deepEqual(task.framework.runtimeSelection,input.selection);assert.ok(Object.isFrozen(task.framework.runtimeSelection.objects[0]));assert.ok(prepared.prompt.includes('data-dsh-source'));assert.ok(prepared.prompt.includes('data-dsh-node'));assert.ok(prepared.prompt.includes('SOURCE TEMPLATE'));assert.ok(prepared.prompt.includes('never write outerHTML'));
   input.selection.objects[0].outerHTML='changed';assert.equal(task.framework.runtimeSelection.objects[0].outerHTML,f.picked.objects[0].outerHTML);
-  const summary=f.ai.taskSummary(task);assert.equal(summary.framework.sourceTargets[0].sourceCode,undefined);assert.equal(summary.framework.runtimeSelection,undefined);assert.ok(summary.framework.sourceTargets[0].resourceId.startsWith('source-selection:'));
+  const summary=f.ai.taskSummary(task);assert.equal(summary.framework.sourceTargets[0].sourceCode,undefined);assert.equal(summary.framework.runtimeSelection,undefined);assert.deepEqual(summary.framework.selectionLabels.map(row=>[row.selectionLabel,row.instanceId]),[['A','runtime-1'],['C','runtime-2']]);assert.ok(prepared.prompt.includes('selectionLabel'));assert.ok(summary.framework.sourceTargets[0].resourceId.startsWith('source-selection:'));
   const agent={id:'designer-p-one'},restored=await f.ai.restoreTask(agent,task);assert.equal(restored.task.id,task.id); // runtime IDs are absent from the static HTML model.
 });
 
@@ -196,7 +258,9 @@ test('framework.edit remains owner-only even when the AI has full project author
 
 test('HTML tasks retain complete runtime elements, original frame metadata and the full saved HTML source node',async()=>{
  const f=fixture(),outerHTML='<section data-dsh-node="a">'+('运行时完整元素'.repeat(4500))+'</section>',picked={pageId:'a-one',nodeIds:['a'],documentEpoch:'html-document-2',renderEpoch:8,sceneId:'error',artifact:{kind:'html',version:2},objects:[{id:'a',nodeId:'a',tag:'section',outerHTML,documentEpoch:'html-document-2',renderEpoch:8,sceneId:'error',artifact:{kind:'html',version:2},sourceLocator:{kind:'html-node',path:'designs/first/page.html',id:'a'}}]};
+ picked.objects[0].selectionLabel='C';
  const {task,context,prompt}=await f.ai.prepare({projectId:'p-one',prompt:'Refine this element',target:{...selection},selection:picked},{user:true}),resource=task.selectionElements[0].resourceId;
+ assert.equal(context.selectionElements[0].selectionLabel,'C');assert.ok(prompt.includes('selectionLabel'));
  assert.equal(task.selectionEvidence.objects[0].outerHTML,outerHTML);assert.ok(Object.isFrozen(task.selectionEvidence.objects[0]));assert.equal(context.selectionElements[0].elementCharacters,outerHTML.length);assert.ok(prompt.includes('complete captured runtime outerHTML'));assert.equal(context.pageArtifacts[0].artifact.kind,'html');assert.equal(f.ai.taskSummary(task).selectionEvidence,undefined);assert.equal(f.ai.taskSummary(task).selectionElements[0].sourceElement,undefined);
  let text='',offset=0;for(;;){const value=await f.ai.readContext({resourceId:resource,offset,limit:4096},{task});text+=value.text;assert.equal(value.frame.documentEpoch,'html-document-2');assert.equal(value.frame.renderEpoch,8);assert.equal(value.frame.sceneId,'error');assert.equal(value.observation.sourceLocator.path,'designs/first/page.html');assert.equal(value.sourceVersion,2);assert.equal(value.readonly,true);if(value.nextOffset===null)break;offset=value.nextOffset;}
  assert.equal(text,outerHTML);const saved=await f.ai.readContext({resourceId:resource,field:'sourceElement'},{task});assert.ok(saved.text.includes('data-dsh-node="a"'));assert.ok(saved.text.includes('Buy'));assert.ok(!saved.text.includes('运行时完整元素'));assert.equal(saved.sourceHash,digest(saved.text));
@@ -213,4 +277,128 @@ test('HTML and framework runtime selections fail explicitly for partial or aggre
   const large=structuredClone(current);large.selection.objects[0].outerHTML='中'.repeat(700000);await assert.rejects(f.ai.prepare(large,{user:true}),error=>error.code==='ELEMENT_CONTEXT_TOO_LARGE');
  }
  const forged=structuredClone(base);forged.selection.objects[0].nodeId='body > section:nth-child(1)';await assert.rejects(f.ai.prepare(forged,{user:true}),error=>error.code==='REFERENCE_NOT_FOUND');
+});
+
+test('scoped help reaches executable schemas and read aliases retain native compaction',async()=>{
+  const f=fixture(),agent={id:'designer-p-one'};f.ai.setTask(agent,selection);
+  f.owner.actionHelp=(action,options)=>({action,type:options.type});
+  const tool=f.ai.scopedTool(agent,'p-one');
+  assert.deepEqual(await tool.execute({action:'help',options:{action:'edit.operations',type:'scene.create'}},{}),{action:'edit.operations',type:'scene.create'});
+  const calls=[];f.owner.execute=async(input,options)=>{calls.push({input,options});return {ok:true}};
+  for(const action of ['edit.read','edit.operations','document.get','state'])await tool.execute({action,options:{pageId:'a-one'}},{});
+  assert.deepEqual(calls.map(row=>row.input.action),['edit.read','edit.operations','edit.read','project.get']);
+  assert.ok(calls.every(row=>row.options.modelFacing===true));
+});
+
+test('task reads expose live revision separately from the frozen admission snapshot',async()=>{
+  const f=fixture(),{task}=await f.ai.prepare(submission(),{user:true});
+  f.project.revision=99;
+  const read=await f.ai.execute({action:'task.get',projectId:'p-one'},{task});
+  assert.equal(read.currentProjectRevision,99);assert.notEqual(task.projectRevision,99);
+});
+
+test('pinned context paths read verified files, paginate text and omit embedded binary payloads',async()=>{
+  const f=fixture(),content='body{background:url(data:image/png;base64,YWJj)} end',resource={id:'r-css',logicalPath:'theme.css',mimeType:'text/css',sha256:digest(content)};
+  const system={id:'s-one',version:3,resources:[resource]},task={projectId:'p-one',effectiveBinding:{systemId:'s-one',version:3,system}};
+  f.owner.workbench.execute=async input=>{assert.equal(input.action,'system.resource.read');assert.equal(input.systemId,'s-one');assert.equal(input.version,3);return {bytesBase64:Buffer.from(content).toString('base64'),mimeType:'text/css'}};
+  const read=await f.ai.readContext({resourceId:'binding:s-one',path:'theme.css'},{task});
+  assert.ok(read.text.includes('[embedded binary omitted]'));assert.ok(!read.text.includes('YWJj'));assert.equal(read.binaryDataOmitted,true);assert.equal(read.sourceContentHash,resource.sha256);
+  const page=await f.ai.readContext({resourceId:'binding:s-one',path:'theme.css',offset:2,limit:4},{task});
+  assert.equal(page.text,read.text.slice(2,6));assert.equal(page.nextOffset,6);
+  const search=await f.ai.readContext({resourceId:'binding:s-one',path:'theme.css',query:'BACKGROUND',contextLines:0},{task});
+  assert.equal(JSON.parse(search.text).matchCount,1);assert.equal(JSON.parse(search.text).matches[0].startLine,1);
+  assert.ok(!search.text.includes('YWJj'));assert.equal(search.sourceContentHash,read.sourceContentHash);
+  await assert.rejects(f.ai.readContext({resourceId:'binding:s-one',path:'theme.css',query:''},{task}),{code:'INVALID_INPUT'});
+  await assert.rejects(f.ai.readContext({resourceId:'binding:s-one',path:'other.css'},{task}),{code:'REFERENCE_NOT_FOUND'});
+  const designTask={projectId:'p-one',effectiveBinding:{},effectiveBindingsByDesign:{'d-one':{systemId:'s-one',version:3,system}}};
+  assert.equal((await f.ai.readContext({resourceId:'binding-design:d-one',path:'theme.css'},{task:designTask})).version,3);
+  const appTask={projectId:'p-one',effectiveBinding:{applications:[{resourceId:'app-one',systemResourceId:'system-one'}],systems:{'system-one':system}}};
+  assert.equal((await f.ai.readContext({resourceId:'app-one',path:'theme.css'},{task:appTask})).systemId,'s-one');
+  f.owner.workbench.execute=async()=>({bytesBase64:Buffer.from('changed').toString('base64'),mimeType:'text/css'});
+  await assert.rejects(f.ai.readContext({resourceId:'binding:s-one',path:'theme.css'},{task}),{code:'REFERENCE_VERSION_CONFLICT'});
+});
+
+test('pinned usage reads only public contracts and selected exact examples with verified pagination',async()=>{
+  const f=fixture(), files={
+    'components.json':JSON.stringify({name:'Project components',version:'2.1',components:[{tag:'custom-field',attributes:['value']},{tag:'custom-dialog',methods:['showModal()']}] }),
+    'tokens.json':JSON.stringify({primary:'#123456'}),
+    'examples/components.html':'<!doctype html><html><body><custom-field><input></custom-field><custom-dialog><p>Actual pinned example</p></custom-dialog></body></html>',
+    'theme.css':'PRIVATE_IMPLEMENTATION_CSS',
+    'components.js':'PRIVATE_IMPLEMENTATION_JS',
+  };
+  const resources=Object.entries(files).map(([logicalPath,content])=>({id:logicalPath,logicalPath,mimeType:logicalPath.endsWith('.json')?'application/json':'text/plain',sha256:digest(content)}));
+  const system={id:'s-custom',version:8,resources},task={projectId:'p-one',scope:'read',designId:'d-one',designIds:['d-one'],pageIds:[],effectiveBinding:{},effectiveBindingsByDesign:{'d-one':{systemId:'s-custom',version:8,system}}};
+  const reads=[];
+  f.owner.workbench.execute=async input=>{reads.push(input);assert.equal(input.systemId,'s-custom');assert.equal(input.version,8);return {bytesBase64:Buffer.from(files[input.resourceId]).toString('base64'),mimeType:resources.find(r=>r.id===input.resourceId).mimeType};};
+  const input={resourceId:'binding-design:d-one',view:'usage',components:['custom-dialog','missing-element']};
+  const read=await f.ai.readContext(input,{task}),usage=JSON.parse(read.text);
+  assert.deepEqual(usage.componentIndex,['custom-field','custom-dialog']);
+  assert.equal(usage.components.length,1);assert.equal(usage.components[0].tag,'custom-dialog');
+  assert.equal(usage.components[0].sample.html,'<custom-dialog><p>Actual pinned example</p></custom-dialog>');
+  assert.equal(files['examples/components.html'].slice(usage.components[0].sample.offset,usage.components[0].sample.offset+usage.components[0].sample.length),usage.components[0].sample.html);
+  assert.deepEqual(usage.tokens,{primary:'#123456'});assert.deepEqual(usage.missingComponents,['missing-element']);
+  assert.equal(read.frozen,true);assert.equal(read.readonly,true);assert.equal(Object.keys(read.sourceResources).length,3);
+  const alias=await f.ai.readContext({...input,path:'components.json'},{task});assert.equal(alias.text,read.text);
+  const virtual=await f.ai.readContext({...input,view:undefined,path:'usage'},{task});assert.equal(virtual.text,read.text);
+  const index=await f.ai.readContext({resourceId:input.resourceId,view:'usage'},{task});assert.equal(JSON.parse(index.text).components.length,2);
+  const agent={id:'designer-p-one'};f.ai.setTask(agent,task);f.ai.scopedPolicy=async()=>({mode:'read-only',workspaceRoot:'/workspace'});
+  const tool=f.ai.scopedTool(agent,'p-one'),native=await tool.execute({action:'system.usage',options:{resourceId:input.resourceId,components:input.components}},{});
+  assert.equal(native.text,read.text);assert.deepEqual(JSON.parse(JSON.stringify(native)),native);
+  reads.length=0;
+  const discovery=await tool.execute({action:'system.index',options:{resourceId:input.resourceId}},{});
+  const catalog=JSON.parse(discovery.text);
+  assert.equal(discovery.view,'index');
+  assert.deepEqual(catalog.components,[{tag:'custom-field'},{tag:'custom-dialog'}]);
+  assert.equal(catalog.tokens,undefined);
+  assert.deepEqual(reads.map(row=>row.resourceId),['components.json']);
+  assert.deepEqual(Object.keys(discovery.sourceResources),['components.json']);
+  reads.length=0;
+  const later=await tool.execute({action:'system.usage',options:{resourceId:input.resourceId,components:['custom-field'],includeTokens:false}},{});
+  assert.equal(JSON.parse(later.text).tokens,undefined);
+  assert.equal(JSON.parse(later.text).components[0].tag,'custom-field');
+  assert.ok(!reads.some(row=>row.resourceId==='tokens.json'));
+  await assert.rejects(f.ai.readContext({...input,includeTokens:'false'},{task}),{code:'INVALID_INPUT'});
+  assert.ok(reads.every(r=>r.action==='system.resource.read'&&!['theme.css','components.js'].includes(r.resourceId)));
+  const first=await f.ai.readContext({...input,limit:100},{task}),second=await f.ai.readContext({...input,offset:first.nextOffset,limit:12000},{task});
+  assert.equal(first.text+second.text,read.text);assert.equal(first.contentHash,second.contentHash);assert.equal(second.nextOffset,null);
+  await assert.rejects(f.ai.readContext({...input,resourceId:'binding-design:foreign'},{task}),{code:'REFERENCE_NOT_FOUND'});
+  await assert.rejects(tool.execute({action:'system.index',options:{resourceId:'binding-design:foreign'}},{}),{code:'REFERENCE_NOT_FOUND'});
+  await assert.rejects(f.ai.readContext({...input,components:'custom-dialog'},{task}),{code:'INVALID_INPUT'});
+  await assert.rejects(f.ai.readContext({...input,path:'components.js'},{task}),{code:'INVALID_INPUT'});
+  files['components.json']='{"components":[]}';
+  await assert.rejects(f.ai.readContext(input,{task}),{code:'REFERENCE_VERSION_CONFLICT'});
+  await assert.rejects(tool.execute({action:'system.index',options:{resourceId:input.resourceId}},{}),{code:'REFERENCE_VERSION_CONFLICT'});
+});
+
+test('usage discovery preserves legacy systems without a component manifest',async()=>{
+  const f=fixture(),task={projectId:'p-one',effectiveBinding:{systemId:'old',version:1,system:{resources:[]}}};
+  const read=await f.ai.readContext({resourceId:'binding:old',view:'usage'},{task});
+  assert.equal(JSON.parse(read.text).available,false);assert.deepEqual(read.sourceResources,{});
+});
+
+test('system source lookup returns literal matching lines and explicitly bounds disjoint matches',()=>{
+  const source='Header\r\nvalue(foo)\r\nFooter\r\n';
+  const result=systemTextMatches(source,'VALUE(foo)',1);
+  assert.equal(result.matchCount,1);assert.equal(result.matches[0].startLine,1);assert.equal(result.matches[0].endLine,3);
+  assert.equal(result.matches[0].text,source.slice(0,-1));assert.equal(result.matches[0].offset,0);
+  const many=systemTextMatches(('match\nother\n').repeat(60),'match',0);
+  assert.equal(many.matchCount,60);assert.equal(many.matches.length,50);assert.equal(many.omittedMatchCount,10);
+  assert.throws(()=>systemTextMatches(source,'foo',20),{code:'INVALID_INPUT'});
+});
+
+test('admission compares the chosen design identity with stored binding',async()=>{
+  const f=fixture(),request=submission({expectedDesignBinding:{designId:'d-one',systemId:'s-one'}});
+  await f.ai.prepare(request,{user:true});
+  f.setBinding({mode:'none',source:'none',systemId:null,version:null,system:null});
+  await assert.rejects(f.ai.prepare(request,{user:true}),{code:'BINDING_CHANGED'});
+});
+test('a decorative library tag cannot hide unthemed fields on an existing page',async()=>{
+  const f=fixture();
+  const task={scope:'page',effectiveBinding:{systemId:'s-one',version:1,system:{resources:['theme.css','components.js','components.json'].map(logicalPath=>({logicalPath}))}}};
+  f.ai.systemText=async()=>({text:JSON.stringify(desktopComponentManifest)});
+  const input={expectedRevision:f.project.revision,html:'<main><ds-tag>状态</ds-tag><button>保存</button><input><select></select></main>'};
+  await assert.rejects(f.ai.prepareGeneratedHTML(input,f.project,'d-one',f.project.artboards[0],{agent:{},task}),error=>{
+    assert.equal(error.code,'SYSTEM_COMPONENTS_MISSING');
+    assert.deepEqual(error.details.components,['ds-button','ds-input','ds-select']);return true;
+  });
 });

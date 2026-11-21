@@ -1,10 +1,12 @@
 import React from 'react';
-import { Button, Modal, ErrorBox, downloadValue } from './common.jsx';
+import { Button, Modal, ErrorBox } from './common.jsx';
 import { Icon } from './brand.jsx';
 import { uploadFile } from './upload.js';
 import styles from './knowledge-panel-styles.js';
 import galleryStyles from './resource-gallery-styles.js';
-import { buildKnowledgeTree, knowledgeIndexState, knowledgeIndexProgress, knowledgeImportState, knowledgeImportRunning, knowledgeImportName, knowledgeDraftDirty, knowledgeViewTicket, knowledgeResponseCurrent, knowledgeUploadPlan, importKnowledgeFiles, knowledgeTextPreview, knowledgeFileSize, loadKnowledgeTextPreview } from './knowledge-panel-state.js';
+import ResourceCardCover from './ResourceCardCover.jsx';
+import KnowledgeFiles from './KnowledgeFiles.jsx';
+import { knowledgeIndexState, knowledgeIndexProgress, knowledgeImportState, knowledgeImportRunning, knowledgeImportName, knowledgeDraftDirty, knowledgeViewTicket, knowledgeResponseCurrent, knowledgeUploadPlan, importKnowledgeFiles } from './knowledge-panel-state.js';
 
 const getKnowledge = value => value?.knowledge || value;
 const formKey = form => `${form.type}:${form.draft?.knowledgeId || form.knowledgeId || form.project?.id || 'new'}`;
@@ -17,15 +19,17 @@ function errorText(error) {
   return error.message || String(error);
 }
 function InlineError({ error }) { return error ? <p className="kb-inline-error" role="alert">{errorText(error)}</p> : null; }
-function FileIcon() { return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M14 3H5v18h14V8Zm0 0v5h5M8 12h8M8 16h6"/></svg>; }
 function MoreMenu({ label = '更多', children }) { return <details className="kb-more" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false; }}><summary aria-label={label}><Icon name="more" size={18}/></summary><div className="kb-more-menu">{children}</div></details>; }
 const menuClick = (event, fn) => { const menu = event.currentTarget.closest('details'); if (menu) menu.open = false; fn(); };
 
-export default function KnowledgePanel({ api, library = {}, onRefresh, registerGuard, onPickDirectory }) {
+export default function KnowledgePanel({ api, library = {}, onRefresh, registerGuard, onPickDirectory, NativeFileTree }) {
+  const fileManager = React.useRef(null);
+  const [fileBusy, setFileBusy] = React.useState(false);
   const [items, setItems] = React.useState(Array.isArray(library.knowledge) ? library.knowledge : []), [knowledgeId, setKnowledgeId] = React.useState(''), [knowledge, setKnowledge] = React.useState(null);
-  const [folders, setFolders] = React.useState(new Set()), [query, setQuery] = React.useState(''), [libraryQuery, setLibraryQuery] = React.useState(''), [searchResult, setSearchResult] = React.useState(null), [includeArchived, setIncludeArchived] = React.useState(false);
-  const [busy, setBusy] = React.useState(false), [error, setError] = React.useState(null), [notice, setNotice] = React.useState(''), [progress, setProgress] = React.useState(null), [failures, setFailures] = React.useState([]);
+  const [query, setQuery] = React.useState(''), [libraryQuery, setLibraryQuery] = React.useState(''), [searchResult, setSearchResult] = React.useState(null), [includeArchived, setIncludeArchived] = React.useState(false);
+  const [ownBusy, setBusy] = React.useState(false), [error, setError] = React.useState(null), [notice, setNotice] = React.useState(''), [progress, setProgress] = React.useState(null), [failures, setFailures] = React.useState([]);
   const [modal, setModal] = React.useState(null), [decision, setDecision] = React.useState(false), [keptCount, setKeptCount] = React.useState(0), [profiles, setProfiles] = React.useState([]), [jobs, setJobs] = React.useState([]);
+  const busy = ownBusy || fileBusy;
   const mounted = React.useRef(true), lifecycle = React.useRef(0), lock = React.useRef(null), view = React.useRef({ knowledgeId: '', sequence: 0 }), requestId = React.useRef(0), listRequest = React.useRef(0), modalEpoch = React.useRef(0), polling = React.useRef(false);
   const live = React.useRef({}), drafts = React.useRef(new Map()), detailRef = React.useRef(null); live.current = { modal, knowledge, jobs, items };
   React.useEffect(() => { if (knowledgeId) detailRef.current?.scrollIntoView({ block: 'start' }); }, [knowledgeId]);
@@ -33,7 +37,7 @@ export default function KnowledgePanel({ api, library = {}, onRefresh, registerG
   const alive = epoch => mounted.current && lifecycle.current === epoch;
   const current = ticket => mounted.current && knowledgeResponseCurrent(ticket, view.current, requestId.current);
   const run = async fn => {
-    if (lock.current) return;
+    if (lock.current || fileManager.current?.isBusy()) return;
     const ticket = { epoch: lifecycle.current }; lock.current = ticket; requestId.current++;
     setBusy(true); setError(null); setNotice(''); setProgress(null);
     try { return await fn(ticket.epoch); } catch (cause) { if (alive(ticket.epoch)) { setError(cause); if (cause.failures) setFailures(cause.failures); } }
@@ -77,14 +81,16 @@ export default function KnowledgePanel({ api, library = {}, onRefresh, registerG
     }, 1800);
     return () => clearInterval(timer);
   }, [api, watch]);
-  const select = id => {
+  const select = (id, confirmed = false) => {
+    if (!confirmed && fileManager.current?.isDirty()) {fileManager.current.navigate(() => select(id, true)); return;}
+    if (fileManager.current?.isBusy()) return;
     if (lock.current || live.current.items.some(item => item.id === id && item.unavailable)) return;
     const next = view.current.knowledgeId === id ? '' : id;
     view.current = { knowledgeId: next, sequence: view.current.sequence + 1 }; requestId.current++;
-    setKnowledgeId(next); setKnowledge(null); setFolders(new Set()); setQuery(''); setSearchResult(null); setError(null);
+    setKnowledgeId(next); setKnowledge(null); setQuery(''); setSearchResult(null); setError(null);
     if (next) run(() => load(next));
   };
-  const openForm = form => { modalEpoch.current++; setDecision(false); setError(null); setModal(drafts.current.get(formKey(form)) || form); };
+  const openForm = (form, confirmed = false) => {if (!confirmed && fileManager.current?.isDirty()) {fileManager.current.navigate(() => openForm(form, true)); return;}  modalEpoch.current++; setDecision(false); setError(null); setModal(drafts.current.get(formKey(form)) || form); };
   const updateDraft = (key, value) => setModal(previous => ({ ...previous, draft: { ...previous.draft, [key]: value } }));
   const forget = form => { drafts.current.delete(formKey(form)); setKeptCount(drafts.current.size); };
   const openLocal = target => {
@@ -118,7 +124,7 @@ export default function KnowledgePanel({ api, library = {}, onRefresh, registerG
   const adoptNewSelection = value => {
     const next = getKnowledge(value); if (!next?.id) return;
     view.current = { knowledgeId: next.id, sequence: view.current.sequence + 1 }; requestId.current++;
-    setKnowledgeId(next.id); setKnowledge(next); setFolders(new Set()); setQuery(''); setSearchResult(null); adopt(value);
+    setKnowledgeId(next.id); setKnowledge(next); setQuery(''); setSearchResult(null); adopt(value);
   };
   const submitImport = async (form, epoch) => {
     const input = form.draft;
@@ -172,9 +178,9 @@ export default function KnowledgePanel({ api, library = {}, onRefresh, registerG
     } finally { if (alive(epoch)) { await refreshList(); if (view.current.knowledgeId) await load(); await onRefresh?.(); } }
   });
   const submitRef = React.useRef(submit); submitRef.current = submit;
-  React.useEffect(() => registerGuard?.({ manual: true, isDirty: () => knowledgeDraftDirty(live.current.modal) || drafts.current.size > 0, isBusy: () => !!lock.current,
-    inspect: () => { if (!live.current.modal && drafts.current.size) { modalEpoch.current++; setModal([...drafts.current.values()].at(-1)); } }, save: () => submitRef.current(),
-    discard: () => { drafts.current.clear(); setKeptCount(0); modalEpoch.current++; setModal(null); setDecision(false); },
+  React.useEffect(() => registerGuard?.({ manual: true, isDirty: () => knowledgeDraftDirty(live.current.modal) || drafts.current.size > 0 || Boolean(fileManager.current?.isDirty()), isBusy: () => !!lock.current || Boolean(fileManager.current?.isBusy()),
+    inspect: () => { if (!live.current.modal && drafts.current.size) { modalEpoch.current++; setModal([...drafts.current.values()].at(-1)); } }, save: () => fileManager.current?.isDirty() ? fileManager.current.save() : submitRef.current(),
+    discard: () => { fileManager.current?.discard(); drafts.current.clear(); setKeptCount(0); modalEpoch.current++; setModal(null); setDecision(false); },
   }), [registerGuard]);
   const reloadForm = () => run(async epoch => {
     const form = live.current.modal, owner = modalEpoch.current;
@@ -194,11 +200,6 @@ export default function KnowledgePanel({ api, library = {}, onRefresh, registerG
     const latest = getKnowledge(await api('knowledge.get', { knowledgeId: item.id })); const value = await api('knowledge.index', { knowledgeId: item.id, expectedRevision: latest.revision, mode: 'bm25' }); if (alive(epoch)) { adopt(value); await refreshList(); }
   });
   const cancelJob = job => run(async epoch => { const value = await api('knowledge.import.cancel', { jobId: job.id }); if (alive(epoch)) setJobs(previous => previous.map(item => item.id === job.id ? value.job : item)); });
-  const preview = (id, document) => run(async epoch => {
-    const owner = ++modalEpoch.current, value = await api('knowledge.document.get', { knowledgeId: id, documentId: document.id });
-    const original = await loadKnowledgeTextPreview(value, document); if (alive(epoch) && owner === modalEpoch.current) setModal({ type: 'preview', knowledgeId: id, document, value: original });
-  });
-  const download = (id, document) => run(async () => { const value = await api('knowledge.document.get', { knowledgeId: id, documentId: document.id }); downloadValue(value, document.name); });
   const search = event => {
     event.preventDefault(); if (!query.trim() || !knowledge) return;
     if (!knowledgeIndexState(knowledge).ready) { const state = knowledgeIndexState(knowledge).state; setNotice(['queued', 'indexing'].includes(state) ? '资料正在整理，可先按文件名查找。' : documents.every(document => !document.searchable) ? '当前目录只有原件，可按文件名查找。' : state === 'failed' ? '整理失败，可从更多菜单重试。' : '资料尚不可搜索，可先按文件名查找。'); return; }
@@ -209,14 +210,7 @@ export default function KnowledgePanel({ api, library = {}, onRefresh, registerG
   const unavailable = items.find(item => item.id === knowledgeId && item.unavailable);
   const selectedItem = items.find(item => item.id === knowledgeId) || knowledge;
   const visible = items.filter(item => (includeArchived || !item.archived) && (!libraryQuery.trim() || `${item.name} ${item.description || ''}`.toLocaleLowerCase().includes(libraryQuery.trim().toLocaleLowerCase())));
-  const tree = React.useMemo(() => { try { return { nodes: buildKnowledgeTree(documents, query) }; } catch (error) { return { nodes: [], error }; } }, [documents, query]);
-  const results = searchResult?.results || searchResult?.resources || [];
   const targets = items.filter(item => !item.archived && !item.unavailable && !jobs.some(job => job.knowledgeId === item.id && knowledgeImportRunning(job)));
-  const renderNodes = (nodes, depth = 1) => <ul className="kb-tree">{nodes.map(node => <li key={node.type === 'folder' ? `folder:${node.path}` : `file:${node.key}`}>
-    <div className="kb-tree-row" style={{ '--kb-indent': `${Math.min(depth, 6) * 17}px` }}>
-      {node.type === 'folder' ? <button type="button" className="kb-tree-name" aria-expanded={query.trim() ? true : folders.has(node.path)} onClick={() => setFolders(previous => { const next = new Set(previous); next.has(node.path) ? next.delete(node.path) : next.add(node.path); return next; })}><Icon name={query.trim() || folders.has(node.path) ? 'chevron-down' : 'chevron-right'} size={13}/><Icon name="folder" size={17}/><span>{node.name}</span></button> : <><button type="button" className="kb-tree-name kb-file-name" disabled={busy} title={node.path} onClick={() => preview(knowledgeId, node.document)}><FileIcon/><span>{node.name}</span></button>{node.document.searchable === false && <span className="kb-original-only" title="原件已保存，当前格式暂不参与检索">仅原件</span>}<span className="kb-file-size">{knowledgeFileSize(node.document.bytes)}</span><Button className="kb-download" disabled={busy} aria-label={`下载 ${node.name}`} onClick={() => download(knowledgeId, node.document)}><Icon name="arrow-up" size={14}/></Button></>}
-    </div>{node.type === 'folder' && (query.trim() || folders.has(node.path)) && renderNodes(node.children, depth + 1)}
-  </li>)}</ul>;
   const resourceState = item => {
     const value = knowledgeId === item.id && knowledge ? knowledge : item, index = knowledgeIndexState(value), job = [...jobs].reverse().find(job => job.knowledgeId === item.id), importing = job && knowledgeImportRunning(job);
     const count = value.documentCount ?? value.documents?.length ?? 0, originalsOnly = (value.searchableCount ?? value.documents?.filter(document => document.searchable).length) === 0 && count > 0;
@@ -225,8 +219,7 @@ export default function KnowledgePanel({ api, library = {}, onRefresh, registerG
   const resourceMenu = (item, state) => <MoreMenu label={`${item.name || '知识库'}的更多操作`}>
     <Button disabled={busy || item.archived || item.unavailable || state.importing} onClick={event => menuClick(event, () => openLocal(item))}>导入本地到此知识库</Button><Button disabled={busy || item.archived || item.unavailable || state.importing} onClick={event => menuClick(event, () => openGit(item))}>导入 Git 到此知识库</Button><Button disabled={busy} onClick={event => menuClick(event, () => openForm({ type: 'mount-picker' }))}>项目绑定</Button><Button disabled={busy || item.unavailable} onClick={event => menuClick(event, () => edit(item))}>重命名</Button>{state.index.state === 'failed' && <Button disabled={busy || item.archived || item.unavailable} onClick={event => menuClick(event, () => retry(item))}>重试整理</Button>}<Button disabled={busy || item.unavailable} onClick={event => menuClick(event, () => openForm({ type: 'archive', item }))}>{item.archived ? '恢复知识库' : '归档知识库'}</Button><Button disabled={busy} onClick={event => menuClick(event, () => run(refresh))}>刷新</Button>
   </MoreMenu>;
-  const previewText = modal?.type === 'preview' ? knowledgeTextPreview(modal.value) : null;
-  return <section className="wb-knowledge kb-page wb-resource-gallery" aria-label="知识库">
+  return <section className="wb-knowledge kb-page wb-resource-gallery" data-detail={Boolean(knowledgeId)} aria-label="知识库">
     <style>{galleryStyles + styles}</style>
     {!knowledgeId && <header className="wb-resource-toolbar"><div className="wb-resource-search"><Icon name="search" size={16}/><input aria-label="搜索知识库" placeholder="搜索知识库…" value={libraryQuery} onChange={event => setLibraryQuery(event.target.value)}/>{libraryQuery && <Button className="wb-ghost wb-icon-button" aria-label="清除知识库搜索" onClick={() => setLibraryQuery('')}><Icon name="x" size={14}/></Button>}</div><div className="wb-resource-actions"><Button primary disabled={busy} onClick={() => openForm({ type: 'add' })}><Icon name="plus" size={16}/>新增</Button><MoreMenu label="知识库更多操作"><Button disabled={busy} onClick={event => menuClick(event, () => openForm({ type: 'mount-picker' }))}>项目绑定</Button><Button onClick={event => menuClick(event, () => setIncludeArchived(value => !value))}>{includeArchived ? '隐藏归档知识库' : '显示归档知识库'}</Button><Button disabled={busy} onClick={event => menuClick(event, () => run(refresh))}>刷新</Button></MoreMenu></div></header>}
     <ErrorBox error={error} onClose={() => setError(null)} context="知识库操作"/>{notice && <p className="kb-notice" role="status">{notice}</p>}{busy && <p className="kb-notice" role="status">{progress ? `正在导入 ${progress.saved.length}/${progress.total}${progress.skipped.length ? ` · 跳过 ${progress.skipped.length}` : ''}` : '正在处理…'}</p>}
@@ -234,22 +227,26 @@ export default function KnowledgePanel({ api, library = {}, onRefresh, registerG
     {keptCount > 0 && <p className="kb-notice">有 {keptCount} 份未完成草稿 <button type="button" onClick={() => { modalEpoch.current++; setModal([...drafts.current.values()].at(-1)); }}>继续编辑</button></p>}
     {jobs.filter(job => !job.knowledgeId || !items.some(item => item.id === job.knowledgeId)).map(job => <div className="kb-import-row" key={job.id}><Icon name="folder" size={17}/><span>{job.name || '导入项目'}</span><small>{knowledgeImportState(job)}</small>{knowledgeImportRunning(job) && <Button disabled={busy || job.status === 'cancelling'} onClick={() => cancelJob(job)}>取消</Button>}<InlineError error={job.error}/></div>)}
     {!knowledgeId && <div className="wb-resource-grid" aria-label="知识库列表">
-      {visible.map(item => { const selected = knowledgeId === item.id, state = resourceState(item), source = state.value.lastImport?.source?.kind; return <article className="wb-resource-card kb-resource-card" key={item.id} data-selected={selected} onClick={event => { if (!event.target.closest('button,details,a,input')) select(item.id); }}>
-        <div className="wb-resource-card-header kb-card-heading"><span className="wb-resource-icon" data-tone={source === 'git' ? 'violet' : source ? 'blue' : 'coral'}><Icon name={source === 'git' ? 'git' : 'book'} size={20}/></span><h2 className="wb-resource-title" title={item.name}>{item.unavailable ? '知识库不可用' : item.name}</h2>{resourceMenu(item, state)}</div>
-        {item.description && <p className="wb-resource-description">{item.description}</p>}
-        <div className="wb-resource-meta"><span>{state.count} 个文件</span><span className="kb-status" data-tone={state.tone}>{state.label}</span>{(state.importFailures.length > 0 || state.failedCount > 0) && <span>{state.importFailures.length || state.failedCount} 个文件未导入</span>}</div>
+      {visible.map(item => { const selected = knowledgeId === item.id, state = resourceState(item), source = state.value.lastImport?.source?.kind; return <article className="wb-project-card kb-resource-card" key={item.id} aria-label={`知识库 ${item.name}`} data-selected={selected}>
+        <button type="button" className="wb-project-card-preview" disabled={busy || item.unavailable} aria-label={`打开知识库 ${item.name}`} aria-expanded={selected} onClick={() => select(item.id)}><ResourceCardCover kind="knowledge" label={source === 'git' ? 'Git 知识库' : '知识库'} icon="knowledge" file="知识文档"/></button>
+        <div className="wb-project-card-actions"><button type="button" className="wb-project-card-name" title={item.name} disabled={busy || item.unavailable} onClick={() => select(item.id)}>{item.unavailable ? '知识库不可用' : item.name}</button><div className="wb-project-card-tools">{resourceMenu(item, state)}</div></div>
+        {state.importing && <div className="wb-gallery-card-meta"><span className="kb-status" data-tone={state.tone}>{state.label}</span><Button disabled={busy || state.job.status === 'cancelling'} onClick={() => cancelJob(state.job)}>取消导入</Button></div>}
         <div className="kb-card-feedback"><InlineError error={state.error}/></div>
-        <footer className="wb-resource-footer"><Button className="wb-resource-open" disabled={busy || item.unavailable} aria-label={`${selected ? '收起' : '打开'}知识库 ${item.name}`} aria-expanded={selected} onClick={() => select(item.id)}>{selected ? '收起详情' : '查看文件'}<Icon name={selected ? 'arrow-left' : 'arrow-right'} size={14}/></Button>{state.importing && <Button disabled={busy || state.job.status === 'cancelling'} onClick={() => cancelJob(state.job)}>取消导入</Button>}</footer>
       </article>; })}
-      {!visible.length && !busy && <div className="wb-resource-empty"><Icon name="book" size={28}/><p>{libraryQuery.trim() ? '没有匹配的知识库' : '还没有知识库'}</p>{!libraryQuery.trim() && <Button onClick={() => openForm({ type: 'add' })}>新增知识库</Button>}</div>}
+      {!visible.length && !busy && <div className="wb-resource-empty"><Icon name="knowledge" size={28}/><p>{libraryQuery.trim() ? '没有匹配的知识库' : '还没有知识库'}</p>{!libraryQuery.trim() && <Button onClick={() => openForm({ type: 'add' })}>新增知识库</Button>}</div>}
     </div>}
     {knowledgeId && selectedItem && (() => { const state = resourceState(selectedItem); return <section ref={detailRef} className="kb-detail" aria-label={`${selectedItem.name}的文件`}>
-      <header className="kb-detail-heading"><div className="kb-detail-title"><Icon name="folder-open" size={20}/><h2>{selectedItem.name}</h2><span className="kb-status" data-tone={state.tone}>{state.label}</span></div><div className="kb-actions">{resourceMenu(selectedItem, state)}<Button disabled={busy} onClick={() => select(knowledgeId)}><Icon name="arrow-left" size={14}/>返回知识库</Button></div></header>
-      <form className="kb-search" onSubmit={search}><Icon name="search" size={16}/><input aria-label="搜索此知识库的文件或内容" placeholder="搜索文件或内容…" value={query} onChange={event => { setQuery(event.target.value); setSearchResult(null); }}/>{query && <button type="button" aria-label="清除文件搜索" onClick={() => { setQuery(''); setSearchResult(null); }}><Icon name="x" size={14}/></button>}<Button type="submit" disabled={busy || !query.trim() || !knowledge}>搜索内容</Button></form>
+      <header className="kb-detail-heading">
+        <Button className="kb-back" disabled={busy} aria-label="返回知识库" title="返回知识库" onClick={() => select(knowledgeId)}><Icon name="arrow-left" size={16}/></Button>
+        <div className="kb-detail-title"><Icon name="knowledge" size={18}/><h2>{selectedItem.name}</h2><span className="kb-status" data-tone={state.tone}>{state.label}</span></div>
+        <form className="kb-search" onSubmit={search}><Icon name="search" size={15}/><input aria-label="搜索此知识库的文件或内容" placeholder="搜索文件或内容…" value={query} onChange={event => {setQuery(event.target.value); setSearchResult(null);}}/>{query && <button type="button" aria-label="清除文件搜索" onClick={() => {setQuery(''); setSearchResult(null);}}><Icon name="x" size={14}/></button>}<Button type="submit" disabled={busy || !query.trim() || !knowledge}>搜索内容</Button></form>
+        <div className="kb-actions">{resourceMenu(selectedItem, state)}</div>
+      </header>
       <InlineError error={state.error}/>{state.importFailures.length > 0 ? <details className="kb-failures"><summary>{state.importFailures.length} 个文件未导入</summary>{state.importFailures.map((failure, position) => <p key={`${failure.path}:${position}`}>{failure.path} · {failure.message || failure.code}</p>)}</details> : state.failedCount > 0 && <p className="kb-notice">{state.failedCount} 个文件未导入。</p>}{state.importing && <div className="kb-root-progress"><Button disabled={busy || state.job.status === 'cancelling'} onClick={() => cancelJob(state.job)}>取消导入</Button></div>}
-      {!unavailable && <div className="kb-directory-content">{!knowledge ? <p className="kb-empty-inline">正在读取目录…</p> : searchResult ? <div className="kb-results"><div className="kb-result-heading"><span>{results.length} 条匹配</span><Button onClick={() => { setSearchResult(null); setQuery(''); }}>返回目录</Button></div>{results.map((result, resultIndex) => { const document = documents.find(document => document.id === result.documentId); return <article key={`${result.documentId}:${result.line}:${resultIndex}`}><button type="button" disabled={busy || !document} onClick={() => document && preview(knowledgeId, document)}>{result.path}{result.line ? `:${result.line}` : ''}</button><p>{result.snippet || result.abstract}</p></article>; })}{!results.length && <p className="kb-empty-inline">没有匹配内容。</p>}</div> : <><InlineError error={tree.error}/>{renderNodes(tree.nodes)}{!tree.nodes.length && <p className="kb-empty-inline">{query.trim() ? '没有匹配的文件名，可搜索内容。' : '目录中还没有文件。'}</p>}</>}</div>}
+      {!unavailable && (knowledge ? <KnowledgeFiles ref={fileManager} key={knowledgeId} api={api} knowledge={knowledge} query={query} searchResult={searchResult} onClearSearch={() => {setQuery(''); setSearchResult(null);}} onChanged={value => {adopt(value); setSearchResult(null);}} onRefresh={refresh} NativeFileTree={NativeFileTree} locked={ownBusy} onBusyChange={setFileBusy}/> : <p className="kb-empty-inline">正在读取目录…</p>)}
+
     </section>; })()}
-    {modal && <Modal key={modal.type} title={({ add: '新增知识库', local: '导入本地', git: '导入 Git', rename: '重命名目录', new: '新建知识库', 'mount-picker': '项目绑定', mount: '项目绑定', archive: modal.item?.archived ? '恢复目录' : '归档目录', preview: modal.document?.name })[modal.type] || '知识库'} onClose={close} wide={modal.type === 'preview'}>
+    {modal && <Modal key={modal.type} title={({ add: '新增知识库', local: '导入本地', git: '导入 Git', rename: '重命名目录', new: '新建知识库', 'mount-picker': '项目绑定', mount: '项目绑定', archive: modal.item?.archived ? '恢复目录' : '归档目录' })[modal.type] || '知识库'} onClose={close}>
       {error && ['rename', 'mount'].includes(modal.type) && <Button disabled={busy} onClick={reloadForm}>读取最新信息，保留修改</Button>}
       {decision && <div className="kb-decision" role="alertdialog" aria-label="尚未完成的修改"><strong>修改尚未完成</strong><div className="kb-actions"><Button primary disabled={busy} onClick={() => setDecision(false)}>继续编辑</Button><Button disabled={busy} onClick={() => { drafts.current.set(formKey(modal), modal); setKeptCount(drafts.current.size); setDecision(false); modalEpoch.current++; setModal(null); }}>保留草稿并关闭</Button><Button disabled={busy} onClick={() => { forget(modal); setDecision(false); modalEpoch.current++; setModal(null); }}>丢弃并关闭</Button></div></div>}
       <div inert={decision || busy ? true : undefined}>
@@ -264,7 +261,7 @@ export default function KnowledgePanel({ api, library = {}, onRefresh, registerG
         </form>}
         {modal.type === 'mount-picker' && <div className="kb-form"><label>项目<select defaultValue="" onChange={event => event.target.value && selectProject(event.target.value)}><option value="">选择项目</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>{!projects.length && <p className="kb-help">还没有项目。</p>}</div>}
         {modal.type === 'archive' && <div className="kb-form"><p>{modal.item.archived ? '恢复后会重新显示此目录。' : '归档后保留文件，可从更多菜单中显示并恢复。'}</p><footer><Button onClick={close}>取消</Button><Button primary onClick={archive}>确认{modal.item.archived ? '恢复' : '归档'}</Button></footer></div>}
-        {modal.type === 'preview' && <div className="kb-preview">{previewText !== null ? <pre>{previewText}</pre> : modal.value.originalUrl && /^image\/(?:png|jpeg|webp|gif)$/.test(modal.document.mimeType || '') ? <img src={modal.value.originalUrl} alt={modal.document.name}/> : <p className="kb-help">此文件可下载原件查看。</p>}{modal.value.truncated && <p className="kb-help">预览已截断，下载可查看完整原件。</p>}<footer><Button onClick={close}>关闭</Button><Button primary onClick={() => download(modal.knowledgeId, modal.document)}>下载原件</Button></footer></div>}
+
       </div>
     </Modal>}
   </section>;

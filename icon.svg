@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1254 1254" fill="none" role="img" aria-labelledby="title desc">
   <title id="title">Plant</title>
-  <desc id="desc">A green leaf-shaped P with a gently curved stem and an upturned tail on white.</desc>
+  <desc id="desc">A blue leaf-shaped P with a gently curved stem and an upturned tail on white.</desc>
   <rect width="1254" height="1254" fill="#FFFFFF"/>
-  <path transform="translate(-8 21)" fill="#20764F" fill-rule="evenodd" d="
+  <path transform="translate(-8 21)" fill="#1744F4" fill-rule="evenodd" d="
     M 891 192
     C 895 188 900 190 900 197
     V 413

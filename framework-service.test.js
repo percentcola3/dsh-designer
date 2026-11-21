@@ -29,8 +29,14 @@ function fixture(){
   return {owner,fs,env,async setup(kind='react'){
     const project=await owner.execute({action:'project.create',name:'Framework '+kind},{user:true});
     const basis=await owner.workbench.project(project.id),page=basis.artboards[0];
-    const saved=await owner.framework.execute({action:'framework.write',projectId:project.id,pageId:page.id,expectedRevision:basis.revision,kind,entry:kind==='react'?'App.jsx':'App.vue',files:[{path:kind==='react'?'App.jsx':'App.vue',code:code(kind)}]},env);
-    return saved;
+    // Materialize an older saved project to exercise source editing after upgrade.
+    const saved=await owner.workbench.mutate({projectId:project.id,expectedRevision:basis.revision},env,'Restore legacy fixture',async next=>{
+      const target=next.artboards.find(item=>item.id===page.id),entry=kind==='react'?'App.jsx':'App.vue';
+      await owner.framework.configureInProject(next,target,{kind,entry,files:[{path:entry,code:code(kind)}]},env);
+    });
+    const restored=saved.artboards.find(item=>item.id===page.id);
+    return {...owner.workbench.result(saved),page:restored,artifact:restored.artifact};
+
   }};
 }
 async function selection(f,saved){
@@ -127,10 +133,12 @@ test('selection replacement cannot switch the page entry to a different register
   assert.equal(f.fs.writes.length,writes);assert.deepEqual(f.fs.snapshot(),before);
 });
 
-test('a new page source directory cannot alias a sibling design even inside the same project',async()=>{
-  const f=fixture(),project=await f.owner.execute({action:'project.create',name:'Canonical source boundary'},{user:true}),p=await f.owner.workbench.project(project.id),page=p.artboards[0],root=await f.owner.projectPhysicalRoot(p.id),sourceRoot=f.owner.framework.root(p,page),before=f.fs.snapshot(),writes=f.fs.writes.length;
+test('legacy source initialization rejects aliased directories before writing',async()=>{
+  const f=fixture(),project=await f.owner.execute({action:'project.create',name:'Canonical source boundary'},f.env);
+  const page=project.artboards[0],root=await f.owner.projectPhysicalRoot(project.id),sourceRoot=f.owner.framework.root(project,page);
+  const before=f.fs.snapshot(),writes=f.fs.writes.length;
   f.fs.aliases.set(path.join(root,sourceRoot),path.join(root,'designs/sibling-source'));
-  await assert.rejects(f.owner.framework.execute({action:'framework.write',projectId:p.id,pageId:page.id,expectedRevision:p.revision,kind:'react',entry:'App.jsx',files:[{path:'App.jsx',code:code('react')}]},f.env),error=>/SCOPE|PATH/.test(error.code));
+  await assert.rejects(f.owner.framework.configureInProject(project,page,{kind:'react',entry:'App.jsx',files:[{path:'App.jsx',code:code('react')}]},f.env),error=>/SCOPE|PATH/.test(error.code));
   assert.equal(f.fs.writes.length,writes);assert.deepEqual(f.fs.snapshot(),before);
 });
 
@@ -141,13 +149,15 @@ test('an existing source file cannot alias a sibling design even when its bytes 
   assert.equal(f.fs.writes.length,writes);assert.deepEqual(f.fs.snapshot(),before);
 });
 
-for(const kind of ['react','vue'])test('public design.create '+kind+' initializes real source files and a compiled page',async()=>{
-  const f=fixture(),project=await f.owner.execute({action:'project.create',name:'Create '+kind},{user:true}),created=await f.owner.execute({action:'design.create',projectId:project.id,expectedRevision:project.revision,name:'Source design',artifactKind:kind},{user:true});
-  assert.equal(created.page.artifact?.kind,kind);assert.ok(created.page.artifact.files.length);assert.ok(created.page.artifact.manifest.length);
-  const read=await f.owner.framework.read({projectId:project.id,pageId:created.page.id},f.env),built=await f.owner.workbench.readAt(created.project,created.page.htmlPath,f.env);
-  assert.equal(created.page.contentHash,hash(built.bytes));assert.match(built.bytes.toString(),/data-dsh-framework-runtime="true"/);assert.ok(read.files.some(file=>file.path.endsWith(kind==='react'?'/App.jsx':'/App.vue')));for(const file of read.files)assert.equal(created.page.artifact.sourceHashes[file.path],hash(file.code));
+for(const kind of ['react','vue','schema'])test('new projects and designs reject '+kind+' without creating files',async()=>{
+  const f=fixture();
+  await assert.rejects(f.owner.execute({action:'project.create',name:'Unsupported',artifactKind:kind},f.env),{code:'INVALID_ARTIFACT_KIND'});
+  const project=await f.owner.execute({action:'project.create',name:'HTML'},f.env),before=f.fs.snapshot();
+  for(const action of ['design.create','page.create',...(kind==='schema'?['schema.apply']:['framework.write','framework.build'])]){
+    await assert.rejects(f.owner.execute({action,projectId:project.id,pageId:project.artboards[0].id,designId:project.artboards[0].designId,expectedRevision:project.revision,name:'Unsupported',artifactKind:kind,kind},f.env),{code:'INVALID_ARTIFACT_KIND'});
+  }
+  assert.deepEqual(f.fs.snapshot(),before);
 });
-
 test('public HTML commit and document editing cannot overwrite a framework build artifact',async()=>{
   const f=fixture(),saved=await f.setup(),file=saved.project.workbench.files.find(file=>file.path===saved.page.htmlPath),basis=await f.owner.execute({action:'edit.read',projectId:saved.project.id,pageId:saved.page.id},{user:true}),before=f.fs.snapshot(),writes=f.fs.writes.length;
   assert.equal(file.readonly,true);assert.deepEqual(basis.document.nodes,{});assert.equal(basis.document.artifact.buildId,saved.artifact.buildId);assert.equal(hash(basis.document.html),saved.page.contentHash);
@@ -241,12 +251,10 @@ test('framework.edit is owner-only through the public bound Native tool entry',a
   assert.equal(f.fs.writes.length,writes);assert.deepEqual(f.fs.snapshot(),before);
 });
 
-for(const action of ['page.clone','design.clone'])test(action+' remaps framework source roots so editing a clone cannot change its original page',async()=>{
-  const f=fixture(),project=await f.owner.execute({action:'project.create',name:'Independent source clone'},{user:true}),original=await f.owner.execute({action:'design.create',projectId:project.id,expectedRevision:project.revision,name:'React original',artifactKind:'react'},{user:true}),old=await f.owner.framework.read({projectId:project.id,pageId:original.page.id},f.env),cloned=await f.owner.execute({action,projectId:project.id,expectedRevision:original.projectRevision,pageId:original.page.id,designId:original.design.id,name:'Independent copy'},{user:true}),copy=await f.owner.framework.read({projectId:project.id,pageId:cloned.page.id},f.env);
-  assert.notEqual(copy.artifact.sourceRoot,old.artifact.sourceRoot);assert.notEqual(copy.artifact.entry,old.artifact.entry);assert.ok(copy.artifact.files.every(filename=>filename.startsWith(copy.artifact.sourceRoot+'/')));assert.ok(copy.artifact.files.every(filename=>!old.artifact.files.includes(filename)));
-  const entry=copy.files.find(file=>file.path===copy.artifact.entry),file=cloned.project.workbench.files.find(file=>file.path===entry.path),updated=await f.owner.execute({action:'file.write',projectId:project.id,fileId:file.id,expectedRevision:cloned.projectRevision,expectedVersion:entry.version,content:entry.code.replace('WORKSPACE','CLONE_ONLY_MARKER')},{user:true});
-  const originalAfter=await f.owner.framework.read({projectId:project.id,pageId:original.page.id},f.env),copyAfter=await f.owner.framework.read({projectId:project.id,pageId:cloned.page.id},f.env);
-  assert.deepEqual(originalAfter.files,old.files);assert.deepEqual(originalAfter.artifact,old.artifact);assert.match(copyAfter.files.find(file=>file.path===copy.artifact.entry).code,/CLONE_ONLY_MARKER/);assert.match(updated.document.html,/CLONE_ONLY_MARKER/);assert.equal(updated.page.contentHash,hash(updated.document.html));
+for(const action of ['page.clone','design.clone'])test(action+' rejects creation of a new framework artifact',async()=>{
+  const f=fixture(),original=await f.setup(),before=f.fs.snapshot();
+  await assert.rejects(f.owner.execute({action,projectId:original.project.id,expectedRevision:original.projectRevision,pageId:original.page.id,designId:original.page.designId},f.env),{code:'INVALID_ARTIFACT_KIND'});
+  assert.deepEqual(f.fs.snapshot(),before);
 });
 
 test('whole project clone keeps stored sourceRoot usable under its new project root and does not share source bytes',async()=>{
@@ -267,4 +275,433 @@ test('existing HTML pages retain their source path and remain editable without f
   assert.equal(made.page.artifact,undefined);const basis=await f.owner.editor.read(project.id,made.page.id,f.env);
   const saved=await f.owner.execute({action:'artboard.commit',projectId:project.id,artboardId:made.page.id,expectedRevision:basis.projectRevision,expectedArtboardRevision:basis.page.revision,html:basis.document.html.replace('Legacy content','Legacy updated')},{user:true});
   assert.equal(saved.page.artifact,undefined);assert.match((await f.owner.workbench.readAt(saved.project,saved.page.htmlPath,f.env)).bytes.toString(),/Legacy updated/);
+});
+
+function semanticFixture() {
+  return {schemaVersion:1,id:'settings',root:'root',nodes:{
+    root:{kind:'layout',layout:'stack',children:['heading','form']},
+    heading:{kind:'text',tag:'h1',text:'通知设置'},
+    form:{kind:'component',use:'form',props:{model:'draft',fields:[{id:'email',label:'通知邮箱',inputType:'email',rules:['required','email']}],submit:{text:'保存',action:'save'}}}},
+    state:{draft:{email:'team@example.com'}},actions:{save:{type:'form.submit',target:'form',onValid:[{type:'feedback.show',text:'保存成功'}]}},
+    scenes:{default:{name:'默认'},invalid:{name:'校验错误',state:{draft:{email:'bad'}},ui:{form:{validation:'submitted'}}},success:{name:'保存成功',ui:{feedback:{text:'保存成功',tone:'success'}}}}};
+}
+async function semanticSetup(f) {
+  const project=await f.owner.execute({action:'project.create',name:'Schema integration'},{user:true});
+  const basis=await f.owner.workbench.project(project.id),page=basis.artboards[0];
+  return f.owner.schema.apply({projectId:project.id,pageId:page.id,expectedRevision:basis.revision,document:semanticFixture()},f.env);
+}
+
+test('native Schema discovery identifies untouched starters, preserves existing source authority and reports the admitted save', async () => {
+  const f=fixture(), project=await f.owner.execute({action:'project.create',name:'Starter discovery'},f.env);
+  const initial=await f.owner.workbench.project(project.id), page=initial.artboards[0];
+  const target={projectId:project.id,pageId:page.id}, agent={id:'starter-agent'};
+  const task={...target,designId:page.designId,scope:'page',pageIds:[page.id]};
+  f.owner.bindings.set(agent.id,project.id);
+  const env={agent,policy,task};
+  let read=await f.owner.schema.read(target,env);
+  assert.equal(read.status,'initial-page');
+  assert.equal(read.next.tool,'designer_commit_html');
+  assert.equal(read.next.artboardId,page.id);
+  assert.equal(read.next.expectedRevision,initial.revision);
+  assert.equal((await f.owner.schema.read(target,{...env,task:{...task,scope:'read'}})).next,undefined);
+  await assert.rejects(f.owner.schema.read(target,f.env),{code:'SCHEMA_SOURCE_REQUIRED'});
+  await f.owner.store.mutate(project.id,initial.revision,'Read pre-marker starter',p=>{delete p.artboards[0].initialTemplateHash;},undefined,policy,false);
+  read=await f.owner.schema.read(target,env);
+  assert.equal(read.status,'initial-page');
+  const before=await f.owner.workbench.readAt(initial,page.htmlPath,f.env);
+  const file=f.fs.files.get((await f.owner.workbench.target(initial,page.htmlPath,f.env)).key);
+  file.bytes=Buffer.from(before.bytes.toString().replace('从这里开始设计','业务首页'));
+  await assert.rejects(f.owner.schema.read(target,env),{code:'VERSION_CONFLICT'});
+  await f.owner.store.mutate(project.id,read.projectRevision,'Adopt custom root at revision one',p=>{p.artboards[0].contentHash=hash(file.bytes);},undefined,policy,false);
+  await assert.rejects(f.owner.schema.read(target,env),{code:'SCHEMA_SOURCE_REQUIRED'});
+  const frame=await f.setup('react'),frameworkTarget={projectId:frame.project.id,pageId:frame.page.id};
+  f.owner.bindings.set(agent.id,frame.project.id);
+  await assert.rejects(f.owner.schema.read(frameworkTarget,{...env,task:{...frameworkTarget,scope:'page',pageIds:[frame.page.id]}}),{code:'SCHEMA_SOURCE_REQUIRED'});
+});
+
+test('semantic source is persisted with stable editable nodes and reopened from the registered JSON file',async()=>{
+  const f=fixture(),saved=await semanticSetup(f);
+  assert.equal(saved.page.artifact.kind,'schema');
+  assert.equal(saved.sceneIds.length,3);
+  const read=await f.owner.execute({action:'schema.read',projectId:saved.project.id,pageId:saved.page.id},{user:true});
+  assert.equal(read.document.nodes.heading.text,'通知设置');
+  assert.ok(read.sourcePath.endsWith('/page.design.json'));
+  const canvas=await f.owner.editor.read(saved.project.id,saved.page.id,f.env);
+  assert.equal(canvas.document.nodes.heading.text,'通知设置');
+  assert.ok(canvas.document.nodes['form:email:input']);
+  const reopened=new DesignerService(f.owner.ctx,{workspaceRoot:'/workspace'});
+  const again=await reopened.schema.read({projectId:saved.project.id,pageId:saved.page.id},f.env);
+  assert.deepEqual(again.document,read.document);
+});
+
+test('canvas text and style edits update canonical source and survive a later semantic rebuild',async()=>{
+  const f=fixture(),saved=await semanticSetup(f),pageId=saved.page.id,projectId=saved.project.id;
+  const basis=await f.owner.editor.read(projectId,pageId,f.env);
+  await f.owner.execute({action:'edit.apply',projectId,pageId,expectedRevision:basis.projectRevision,operations:[{type:'text',nodeIds:['heading'],value:'消息通知偏好'},{type:'style',nodeIds:['root'],styles:{maxWidth:'720px'}}]},{user:true});
+  let read=await f.owner.schema.read({projectId,pageId},f.env);
+  assert.equal(read.document.nodes.heading.text,'消息通知偏好');
+  assert.ok(read.document.documentOperations.some(op=>op.type==='style'));
+  await f.owner.schema.apply({projectId,pageId,expectedRevision:read.projectRevision,operations:[{type:'state.set',path:'draft.email',value:'changed@example.com'}]},f.env);
+  const canvas=await f.owner.editor.read(projectId,pageId,f.env);
+  assert.equal(canvas.document.nodes.heading.text,'消息通知偏好');
+  assert.equal(canvas.document.nodes.root.style['max-width'],'720px');
+  assert.equal(canvas.document.nodes['form:email:input'].attributes.value,'changed@example.com');
+});
+
+test('native field value changes are written into the semantic state used by preview actions',async()=>{
+  const f=fixture(),saved=await semanticSetup(f),projectId=saved.project.id,pageId=saved.page.id;
+  await f.owner.execute({action:'edit.apply',projectId,pageId,expectedRevision:saved.projectRevision,operations:[{type:'attributes',nodeIds:['form:email:input'],attributes:{value:'editor@example.com'}}]},{user:true});
+  const read=await f.owner.schema.read({projectId,pageId},f.env);
+  assert.equal(read.document.state.draft.email,'editor@example.com');
+});
+
+test('editing radio choice labels and checked values preserves the typed source and independent scene selections',async()=>{
+  const f=fixture(),initial=await semanticSetup(f),target={projectId:initial.project.id,pageId:initial.page.id};
+  const definition=semanticFixture();
+  definition.nodes.form.props.fields.push({id:'frequency',label:'频率',control:'radio',options:[{label:'零',value:0},{label:'关闭',value:false}]});
+  definition.state.draft.frequency=0;
+  definition.scenes.off={name:'关闭',state:{draft:{frequency:0}}};
+  let result=await f.owner.schema.apply({...target,expectedRevision:initial.projectRevision,document:definition},f.env);
+  const edit=async(operations,sceneId)=>{
+    result=await f.owner.execute({action:'edit.apply',...target,expectedRevision:result.projectRevision,operations,sceneId},{user:true});
+  };
+  const choice='form:frequency:option-1';
+  await edit([{type:'attributes',nodeIds:[choice+':input'],attributes:{checked:true}}],'off');
+  await edit([{type:'text',nodeIds:[choice+':text'],value:'停用'},
+    {type:'attributes',nodeIds:[choice+':input'],attributes:{value:'true'}}]);
+  const {document}=await f.owner.schema.read(target,f.env);
+  assert.equal(document.state.draft.frequency,0);
+  assert.equal(document.scenes.off.state.draft.frequency,true);
+  assert.deepEqual(document.nodes.form.props.fields.at(-1).options[1],{label:'停用',value:true});
+  const canvas=await f.owner.editor.read(target.projectId,target.pageId,f.env);
+  assert.equal(canvas.document.nodes[choice+':text'].text,'停用');
+  assert.equal(canvas.document.nodes[choice+':input'].attributes['data-schema-radio-value'],'true');
+});
+
+test('schema undo and redo restore matching source and generated HTML',async()=>{
+  const f=fixture(),saved=await semanticSetup(f),projectId=saved.project.id,pageId=saved.page.id;
+  const changed=await f.owner.schema.apply({projectId,pageId,expectedRevision:saved.projectRevision,operations:[{type:'node.update',id:'heading',patch:{text:'Changed'}}]},f.env);
+  const undone=await f.owner.execute({action:'edit.undo',projectId,pageId,expectedRevision:changed.projectRevision},{user:true});
+  let read=await f.owner.schema.read({projectId,pageId},f.env);
+  assert.equal(read.document.nodes.heading.text,'通知设置');
+  const redone=await f.owner.execute({action:'edit.redo',projectId,pageId,expectedRevision:undone.projectRevision},{user:true});
+  read=await f.owner.schema.read({projectId,pageId},f.env);
+  assert.equal(read.document.nodes.heading.text,'Changed');
+  const canvas=await f.owner.editor.read(projectId,pageId,f.env);
+  assert.equal(canvas.document.nodes.heading.text,'Changed');
+  assert.equal(redone.page.artifact.history.cursor,1);
+});
+
+test('the normal source file save entry rebuilds its page with file CAS protection',async()=>{
+  const f=fixture(),saved=await semanticSetup(f),projectId=saved.project.id,pageId=saved.page.id;
+  const source=await f.owner.schema.read({projectId,pageId},f.env),document=structuredClone(source.document);
+  document.nodes.heading.text='Saved from source editor';
+  const next=await f.owner.execute({action:'file.write',projectId,fileId:source.sourceFileId,expectedVersion:source.sourceVersion,expectedRevision:source.projectRevision,content:JSON.stringify(document)},{user:true});
+  assert.equal(next.sourceContent.includes('Saved from source editor'),true);
+  const canvas=await f.owner.editor.read(projectId,pageId,f.env);
+  assert.equal(canvas.document.nodes.heading.text,'Saved from source editor');
+  await assert.rejects(f.owner.execute({action:'file.write',projectId,fileId:source.sourceFileId,expectedVersion:source.sourceVersion,expectedRevision:next.projectRevision,content:JSON.stringify(document)},{user:true}),{code:'VERSION_CONFLICT'});
+});
+
+test('invalid source and stale project versions leave the published page intact',async()=>{
+  const f=fixture(),saved=await semanticSetup(f),projectId=saved.project.id,pageId=saved.page.id,before=f.fs.snapshot();
+  const bad=semanticFixture();bad.root='missing';
+  await assert.rejects(f.owner.schema.apply({projectId,pageId,expectedRevision:saved.projectRevision,document:bad},f.env),{code:'SCHEMA_INVALID'});
+  assert.deepEqual(f.fs.snapshot(),before);
+  await assert.rejects(f.owner.schema.apply({projectId,pageId,expectedRevision:saved.projectRevision-1,document:semanticFixture()},f.env),{code:'VERSION_CONFLICT'});
+});
+
+test('a publication failure leaves the previous source and HTML pair readable',async()=>{
+  const f=fixture(),saved=await semanticSetup(f),projectId=saved.project.id,pageId=saved.page.id;
+  const write=f.fs.writeText.bind(f.fs);
+  f.fs.writeText=async(target,...rest)=>{if(target.key.includes('revision-schema-'))throw Object.assign(Error('disk failure'),{code:'FS_WRITE_FAILED'});return write(target,...rest);};
+  await assert.rejects(f.owner.schema.apply({projectId,pageId,expectedRevision:saved.projectRevision,operations:[{type:'node.update',id:'heading',patch:{text:'Unpublished'}}]},f.env),{code:'FS_WRITE_FAILED'});
+  const read=await f.owner.schema.read({projectId,pageId},f.env),canvas=await f.owner.editor.read(projectId,pageId,f.env);
+  assert.equal(read.document.nodes.heading.text,'通知设置');
+  assert.equal(canvas.document.nodes.heading.text,'通知设置');
+});
+
+test('a saved schema remains readable when a new non-HTML page copy is rejected',async()=>{
+  const f=fixture(),saved=await semanticSetup(f),projectId=saved.project.id;
+  await assert.rejects(f.owner.execute({action:'page.clone',projectId,pageId:saved.page.id,expectedRevision:saved.projectRevision},f.env),{code:'INVALID_ARTIFACT_KIND'});
+  const source=await f.owner.schema.read({projectId,pageId:saved.page.id},f.env);
+  assert.equal(source.document.nodes.heading.text,'通知设置');
+});
+
+test('selected canvas edits preserve unrelated source while whole schema replacement remains scoped',async()=>{
+  const f=fixture(),saved=await semanticSetup(f),projectId=saved.project.id,pageId=saved.page.id;
+  const task={projectId,pageId,designId:saved.page.designId,pageIds:[pageId],scope:'selection',nodeIds:['heading']},env={policy,task,target:task};
+  await assert.rejects(f.owner.schema.apply({projectId,pageId,expectedRevision:saved.projectRevision,document:semanticFixture()},env),{code:'SCOPE_DENIED'});
+  const basis=await f.owner.editor.read(projectId,pageId,f.env);
+  const updated=await f.owner.editor.execute({action:'edit.apply',projectId,pageId,expectedRevision:basis.projectRevision,operations:[{type:'text',nodeIds:['heading'],value:'Scoped'}]},env);
+  const read=await f.owner.schema.read({projectId,pageId},f.env);
+  assert.equal(read.document.nodes.heading.text,'Scoped');
+  assert.deepEqual(read.document.nodes.form,semanticFixture().nodes.form);
+  assert.ok(updated.saved);
+});
+
+test('schema reads and writes respect exact page and read-only targets',async()=>{
+  const f=fixture(),saved=await semanticSetup(f),projectId=saved.project.id,pageId=saved.page.id;
+  const task={projectId,pageId:'a-other',designId:saved.page.designId,scope:'page'};
+  await assert.rejects(f.owner.schema.read({projectId,pageId},{policy,task}),{code:'SCOPE_DENIED'});
+  const readonly={...task,pageId,scope:'read'};
+  await assert.rejects(f.owner.schema.apply({projectId,pageId,expectedRevision:saved.projectRevision,document:semanticFixture()},{policy,task:readonly}),{code:'SCOPE_DENIED'});
+});
+
+test('semantic preview snapshots, scene rename and scene removal survive recompilation',async()=>{
+  const f=fixture(),saved=await semanticSetup(f),projectId=saved.project.id,pageId=saved.page.id;
+  const captured=await f.owner.execute({action:'edit.apply',projectId,pageId,expectedRevision:saved.projectRevision,operations:[{type:'scene.set',scene:{id:'captured',name:'预览捕获',nodes:{},schemaState:{draft:{email:'capture@example.com'}},schemaUI:{feedback:{text:'预览成功',tone:'success'}}}}]},{user:true});
+  let source=await f.owner.schema.read({projectId,pageId},f.env);
+  assert.equal(source.document.scenes.captured.state.draft.email,'capture@example.com');
+  assert.equal(source.document.scenes.captured.ui.feedback.text,'预览成功');
+  const renamed=await f.owner.execute({action:'edit.apply',projectId,pageId,expectedRevision:captured.projectRevision,operations:[{type:'scene.set',scene:{id:'captured',name:'已更名',nodes:{}}}]},{user:true});
+  source=await f.owner.schema.read({projectId,pageId},f.env);
+  assert.equal(source.document.scenes.captured.name,'已更名');
+  const removed=await f.owner.execute({action:'edit.apply',projectId,pageId,expectedRevision:renamed.projectRevision,operations:[{type:'scene.reset',id:'captured',remove:true}]},{user:true});
+  source=await f.owner.schema.read({projectId,pageId},f.env);
+  assert.equal(source.document.scenes.captured,undefined);
+  assert.ok(removed.saved);
+});
+
+test('concurrent semantic saves publish exactly one consistent source and HTML pair',async()=>{
+  const f=fixture(),saved=await semanticSetup(f),projectId=saved.project.id,pageId=saved.page.id;
+  const results=await Promise.allSettled(['First','Second'].map(text=>f.owner.schema.apply({projectId,pageId,expectedRevision:saved.projectRevision,operations:[{type:'node.update',id:'heading',patch:{text}}]},f.env)));
+  assert.equal(results.filter(result=>result.status==='fulfilled').length,1);
+  assert.equal(results.find(result=>result.status==='rejected').reason.code,'VERSION_CONFLICT');
+  const source=await f.owner.schema.read({projectId,pageId},f.env),canvas=await f.owner.editor.read(projectId,pageId,f.env);
+  assert.equal(canvas.document.nodes.heading.text,source.document.nodes.heading.text);
+});
+
+test('retry after failed publication reuses immutable source and successfully publishes',async()=>{
+  const f=fixture(),saved=await semanticSetup(f),projectId=saved.project.id,pageId=saved.page.id;
+  const write=f.fs.writeText.bind(f.fs);
+  f.fs.writeText=async(target,...args)=>{if(target.key.includes('revision-schema-'))throw Object.assign(Error('disk failure'),{code:'FS_WRITE_FAILED'});return write(target,...args);};
+  const input={projectId,pageId,expectedRevision:saved.projectRevision,operations:[{type:'node.update',id:'heading',patch:{text:'Retried'}}]};
+  await assert.rejects(f.owner.schema.apply(input,f.env),{code:'FS_WRITE_FAILED'});
+  f.fs.writeText=write;
+  await f.owner.schema.apply(input,f.env);
+  const source=await f.owner.schema.read({projectId,pageId},f.env);
+  assert.equal(source.document.nodes.heading.text,'Retried');
+});
+
+test('an admitted canonical JSON file task can rebuild only its owning page repeatedly',async()=>{
+  const f=fixture(),saved=await semanticSetup(f),projectId=saved.project.id,pageId=saved.page.id;
+  let source=await f.owner.schema.read({projectId,pageId},f.env);
+  const authority={kind:'project-file',fileId:source.sourceFileId,path:source.sourcePath};
+  const task={projectId,scope:'project',authority,writeBoundaryPaths:[source.sourcePath]},env={policy,task,target:task};
+  for (const text of ['File task first','File task second']) {
+    const document=structuredClone(source.document);document.nodes.heading.text=text;
+    await f.owner.schema.apply({projectId,pageId,expectedRevision:source.projectRevision,expectedVersion:source.sourceVersion,document},env);
+    source=await f.owner.schema.read({projectId,pageId},f.env);
+    assert.equal(source.document.nodes.heading.text,text);
+  }
+  const wrong={...task,authority:{...authority,fileId:'f-unrelated'}};
+  await assert.rejects(f.owner.schema.apply({projectId,pageId,expectedRevision:source.projectRevision,document:source.document},{policy,task:wrong,target:wrong}),{code:'SCOPE_DENIED'});
+});
+
+test('portable project export and import preserve canonical schema editing and rebuilds',async()=>{
+  const {buildPortableProject,portableProjectMetadata}=await import('./portable-project.js');
+  const f=fixture(),saved=await semanticSetup(f);
+  const snapshot=await buildPortableProject(f.owner,saved.project.id,f.env);
+  const payload=snapshot.manifest.project.artboards.find(page=>page.id===saved.page.id);
+  assert.equal(payload.artifact.kind,'schema');
+  assert.equal(payload.artifact.history.entries.length,1);
+  const destination=await f.owner.execute({action:'project.create',name:'Imported Schema'},{user:true});
+  const current=await f.owner.workbench.project(destination.id);
+  const incoming=portableProjectMetadata(current,snapshot.manifest);
+  for (const file of snapshot.files.filter(file=>file.path!=='designer-project.json')) {
+    const target=await f.owner.workbench.target(incoming,file.path,f.env),before=await f.fs.stat(target);
+    await f.owner.workbench.writeAt(incoming,file.path,file.bytes.toString('utf8'),before?.version??null,f.env);
+  }
+  const imported=await f.owner.workbench.mutate({projectId:current.id,expectedRevision:current.revision},f.env,'Import schema package',next=>Object.assign(next,incoming));
+  let source=await f.owner.schema.read({projectId:imported.id,pageId:saved.page.id},f.env);
+  assert.equal(source.document.nodes.heading.text,'通知设置');
+  await f.owner.schema.apply({projectId:imported.id,pageId:saved.page.id,expectedRevision:source.projectRevision,operations:[{type:'node.update',id:'heading',patch:{text:'Portable edit'}}]},f.env);
+  source=await f.owner.schema.read({projectId:imported.id,pageId:saved.page.id},f.env);
+  assert.equal(source.document.nodes.heading.text,'Portable edit');
+});
+
+test('canonical JSON saves require a file version through the normal file entry',async()=>{
+  const f=fixture(),saved=await semanticSetup(f),source=await f.owner.schema.read({projectId:saved.project.id,pageId:saved.page.id},f.env);
+  await assert.rejects(f.owner.execute({action:'file.write',projectId:saved.project.id,fileId:source.sourceFileId,expectedRevision:source.projectRevision,content:JSON.stringify(source.document)},{user:true}),{code:'CAS_REQUIRED'});
+});
+
+test('source maps are rederived before a selected edit instead of trusting portable metadata',async()=>{
+  const f=fixture(),saved=await semanticSetup(f),projectId=saved.project.id,pageId=saved.page.id;
+  const project=await f.owner.store.mutate(projectId,saved.projectRevision,'Tampered artifact metadata',p=>{p.artboards[0].artifact.sourceMap.heading={nodeId:'form',part:'props.title'};},undefined,policy,false);
+  const task={projectId,pageId,designId:saved.page.designId,pageIds:[pageId],scope:'selection',nodeIds:['heading']};
+  await f.owner.editor.execute({action:'edit.apply',projectId,pageId,expectedRevision:project.revision,operations:[{type:'text',nodeIds:['heading'],value:'Verified heading'}]},{policy,task,target:task});
+  const source=await f.owner.schema.read({projectId,pageId},f.env);
+  assert.equal(source.document.nodes.heading.text,'Verified heading');
+  assert.deepEqual(source.document.nodes.form,semanticFixture().nodes.form);
+});
+
+test('failed semantic drafts can be repaired with small scoped operations without resending the page',async()=>{
+  const f=fixture(),project=await f.owner.execute({action:'project.create',name:'Failed draft recovery'},{user:true}),basis=await f.owner.workbench.project(project.id),pageId=basis.artboards[0].id;
+  const document=semanticFixture();document.nodes.root.children=[];
+  await assert.rejects(f.owner.schema.apply({projectId:project.id,pageId,expectedRevision:basis.revision,document},f.env),error=>error.code==='SCHEMA_INVALID'&&error.details.recovery.retryLast===true);
+  const saved=await f.owner.schema.apply({projectId:project.id,pageId,expectedRevision:basis.revision,retryLast:true,operations:[{type:'node.update',id:'root',patch:{children:['heading','form']}}]},f.env);
+  const source=await f.owner.schema.read({projectId:project.id,pageId},f.env);
+  assert.equal(source.document.nodes.heading.text,'通知设置');
+  assert.equal(saved.sceneIds.length,3);
+  assert.equal(f.owner.schema.failedDefinitions.size,0);
+});
+
+test('validated draft handles publish the same task definition without resending JSON',async()=>{
+  const f=fixture(),project=await f.owner.execute({action:'project.create',name:'Validated draft'},{user:true}),basis=await f.owner.workbench.project(project.id),pageId=basis.artboards[0].id;
+  const validation=await f.owner.schema.execute({action:'schema.validate',projectId:project.id,pageId,document:semanticFixture()},f.env);
+  assert.equal(validation.valid,true);
+  assert.equal((await f.owner.workbench.project(project.id)).revision,basis.revision);
+  const saved=await f.owner.schema.apply({projectId:project.id,...validation.next},f.env);
+  assert.equal(saved.saved,true);
+  assert.equal(f.owner.schema.validatedDefinitions.size,0);
+  await assert.rejects(f.owner.schema.apply({projectId:project.id,...validation.next,expectedRevision:saved.projectRevision},f.env),{code:'VERSION_CONFLICT'});
+});
+
+test('local schema changes target field values and unique stylesheet fragments in a single revision',async()=>{
+  const f=fixture(),saved=await semanticSetup(f),target={projectId:saved.project.id,pageId:saved.page.id};
+  const pointer='/nodes/form/props/fields/0/help';
+  const write=(revision,operations)=>f.owner.execute({action:'schema.apply',...target,expectedRevision:revision,operations},f.env);
+  const read=path=>f.owner.execute({action:'schema.read',...target,pointer:path},f.env);
+  const original=await read('/nodes/form/props/fields');
+  const first=await write(saved.projectRevision,[
+    {type:'source.set',pointer,value:'填写工作邮箱'},
+    {type:'source.set',pointer:'/css',value:'.content{width:100%;max-width:700px}'},
+    {type:'source.set',pointer:'/state/unit~1rate~0old',value:5},
+  ]);
+  assert.equal((await read('/state/unit~1rate~0old')).document,5);
+  const second=await write(first.projectRevision,[
+    {type:'source.replaceText',pointer:'/css',find:'max-width:700px',replace:'max-width:720px'},
+  ]);
+  assert.equal(JSON.parse((await read('/css')).text),'.content{width:100%;max-width:720px}');
+  assert.deepEqual((await read('/nodes/form/props/fields')).document,original.document.map((field,index)=>index===0?{...field,help:'填写工作邮箱'}:field));
+  const canvas=await f.owner.editor.read(target.projectId,target.pageId,f.env);
+  assert.match(canvas.document.html,/max-width:720px/);
+  assert.match(canvas.document.html,/填写工作邮箱/);
+  assert.deepEqual(second.sceneIds,saved.sceneIds);
+  for(const bad of [
+    {type:'source.replaceText',pointer:'/css',find:'width',replace:'padding'},
+    {type:'source.replaceText',pointer:'/css',find:'wrong',replace:'x'},
+    {type:'source.set',pointer:'/nodes/form/props/fields/length',value:0},
+    {type:'source.set',pointer:'/nodes/form/props/fields/99',value:{}},
+    {type:'source.set',pointer:'/state/__proto__/injected',value:1},
+  ]){
+    await assert.rejects(write(second.projectRevision,[{type:'source.set',pointer,value:'未发布'},bad]),error=>['SCHEMA_PATH','SCHEMA_OPERATIONS'].includes(error.code));
+    const source=await read(pointer);
+    assert.equal(JSON.parse(source.text),'填写工作邮箱');
+    assert.equal(source.projectRevision,second.projectRevision);
+  }
+});
+
+test('an older schema page gets current page navigation in the editor without rewriting its saved HTML',async()=>{
+  const f=fixture(),initial=await semanticSetup(f),projectId=initial.project.id,pageId=initial.page.id;
+  const target=await f.owner.execute({action:'page.create',projectId,designId:initial.page.designId,expectedRevision:initial.projectRevision,name:'首页 链接'},f.env);
+  const definition=semanticFixture();
+  definition.actions.home={type:'navigate',pageId:target.page.id};
+  definition.nodes.form.props.actions=[{action:'home',text:'首页'}];
+  const source=await f.owner.schema.apply({projectId,pageId,expectedRevision:target.projectRevision,document:definition},f.env);
+  const next=await f.owner.schema.apply({projectId,pageId:target.page.id,expectedRevision:source.projectRevision,document:semanticFixture()},f.env);
+  const previous=await f.owner.store.mutate(projectId,next.projectRevision,'Open a previous compiler build',p=>{
+    p.artboards.find(item=>item.id===pageId).artifact.compilerVersion='1.0.0';
+  },undefined,policy,false);
+  const read=await f.owner.execute({action:'edit.read',projectId,pageId},f.env);
+  const urls=html=>JSON.parse(html.match(/<script[^>]*id="dsh-document-model"[^>]*>([^<]+)<\/script>/)[1]).runtime.pageURLs;
+  const link=targetPath=>path.posix.relative(path.posix.dirname(source.page.htmlPath),targetPath).split('/').map(encodeURIComponent).join('/');
+  assert.deepEqual(urls(read.document.savedHTML),{[target.page.id]:link(target.page.htmlPath)});
+  assert.deepEqual(urls(read.document.previewHTML),{[target.page.id]:link(next.page.htmlPath)});
+  assert.equal(read.sourceHash,hash(read.document.savedHTML));
+  assert.equal((await f.owner.workbench.project(projectId)).revision,previous.revision);
+});
+
+test('owner compilation resolves a bound design system through the normal binding path',async()=>{
+  const {desktopSystemFiles}=await import('./desktop-theme.js');
+  const f=fixture(),system=await f.owner.execute({action:'system.create',name:'PC theme',format:'directory',resources:desktopSystemFiles(),platforms:['web']},{user:true});
+  const project=await f.owner.execute({action:'project.create',name:'Bound schema owner',systemId:system.id,systemVersion:1},{user:true}),basis=await f.owner.workbench.project(project.id);
+  const saved=await f.owner.schema.apply({projectId:project.id,pageId:basis.artboards[0].id,expectedRevision:basis.revision,document:semanticFixture()},f.env);
+  assert.equal(saved.binding.systemId,system.id);
+});
+
+test('editing a display tag updates its literal or scene-bound label through the normal editor',async()=>{
+  const f=fixture(),initial=await semanticSetup(f),projectId=initial.project.id,pageId=initial.page.id;
+  const document=semanticFixture();
+  document.nodes.root.children.push('status','slot');
+  document.nodes.status={kind:'component',use:'tag',props:{text:'营业中',tone:'success'}};
+  document.nodes.slot={kind:'component',use:'ds-tag',props:{bind:'draft.slot'}};
+  document.state.draft.slot='上午';
+  document.scenes.afternoon={name:'下午预约',state:{draft:{slot:'下午'}}};
+  const saved=await f.owner.schema.apply({projectId,pageId,expectedRevision:initial.projectRevision,document},f.env);
+  const first=await f.owner.execute({action:'edit.apply',projectId,pageId,expectedRevision:saved.projectRevision,
+    operations:[{type:'text',nodeIds:['status'],value:'营业结束'}]},f.env);
+  await f.owner.execute({action:'edit.apply',projectId,pageId,sceneId:'afternoon',expectedRevision:first.projectRevision,
+    operations:[{type:'text',nodeIds:['slot'],value:'下午两点'}]},f.env);
+  const source=(await f.owner.schema.read({projectId,pageId},f.env)).document;
+  assert.equal(source.nodes.status.props.text,'营业结束');
+  assert.equal(source.nodes.status.props.tone,'success');
+  assert.equal(source.scenes.afternoon.state.draft.slot,'下午两点');
+  assert.equal(source.state.draft.slot,'上午');
+});
+
+test('saved 1.0.0 through 1.0.2 select pages get the current scene preview without changing saved bytes',async()=>{
+  const f=fixture(),initial=await semanticSetup(f),projectId=initial.project.id,pageId=initial.page.id;
+  const definition=semanticFixture();
+  definition.nodes.form.props.fields.push({id:'slot',label:'到店时段',control:'select',options:[{value:'am',label:'上午'},{value:'pm',label:'下午'}]});
+  definition.state.draft.slot='am';
+  definition.scenes.afternoon={name:'下午预约',state:{draft:{slot:'pm'}}};
+  const result=await f.owner.schema.apply({projectId,pageId,expectedRevision:initial.projectRevision,document:definition},f.env);
+  const root=await f.owner.projectPhysicalRoot(projectId),file=f.fs.files.get(path.join(root,result.page.htmlPath));
+  const legacy=file.bytes.toString().replace(/(<script[^>]*data-dsh-schema-runtime[^>]*>)[\s\S]*?(<\/script>)/,'$1/* previous compiled runtime */$2');
+  file.bytes=Buffer.from(legacy);
+  let revision=result.projectRevision;
+  for(const version of ['1.0.0','1.0.1','1.0.2']){
+    const previous=await f.owner.store.mutate(projectId,revision,'Load previous compiled preview',p=>{
+      const page=p.artboards.find(item=>item.id===pageId);
+      page.artifact.compilerVersion=version;page.contentHash=hash(legacy);
+    },undefined,policy,false);
+    revision=previous.revision;
+    const before=f.fs.snapshot();
+    const read=await f.owner.execute({action:'edit.read',projectId,pageId},f.env);
+    assert.equal(read.document.savedHTML,legacy);
+    assert.equal(read.sourceHash,hash(legacy));
+    assert.doesNotMatch(read.document.previewHTML,/previous compiled runtime/);
+    assert.match(read.document.previewHTML,/data-schema-bind="draft.slot"/);
+    assert.deepEqual(f.fs.snapshot(),before);
+  }
+});
+
+test('inserted and duplicated canvas nodes retain their identities across later semantic builds',async()=>{
+  const f=fixture(),saved=await semanticSetup(f),projectId=saved.project.id,pageId=saved.page.id;
+  const changed=await f.owner.execute({action:'edit.apply',projectId,pageId,expectedRevision:saved.projectRevision,operations:[{type:'duplicate',nodeIds:['heading']},{type:'insert',parentId:'root',html:'<aside><p>Inserted note</p></aside>'}]},{user:true});
+  const copyId=changed.changes.copies[0].rootId,canvas=await f.owner.editor.read(projectId,pageId,f.env);
+  assert.equal(canvas.document.nodes[copyId].text,'通知设置');
+  const inserted=Object.values(canvas.document.nodes).find(node=>node.tag==='p'&&node.text==='Inserted note');
+  assert.ok(inserted);
+  const edited=await f.owner.execute({action:'edit.apply',projectId,pageId,expectedRevision:changed.projectRevision,operations:[{type:'text',nodeIds:[copyId],value:'Copy changed'},{type:'text',nodeIds:[inserted.id],value:'Note changed'}]},{user:true});
+  await f.owner.schema.apply({projectId,pageId,expectedRevision:edited.projectRevision,operations:[{type:'state.set',path:'draft.email',value:'recompiled@example.com'}]},f.env);
+  const result=await f.owner.editor.read(projectId,pageId,f.env);
+  assert.equal(result.document.nodes[copyId].text,'Copy changed');
+  assert.equal(result.document.nodes[inserted.id].text,'Note changed');
+});
+
+test('scene-specific field edits preserve default data and visibility writes back to the definition',async()=>{
+  const f=fixture(),saved=await semanticSetup(f),projectId=saved.project.id,pageId=saved.page.id;
+  const changed=await f.owner.execute({action:'edit.apply',projectId,pageId,sceneId:'invalid',expectedRevision:saved.projectRevision,operations:[{type:'attributes',nodeIds:['form:email:input'],attributes:{value:'scene@example.com'}}]},{user:true});
+  let source=await f.owner.schema.read({projectId,pageId},f.env);
+  assert.equal(source.document.state.draft.email,'team@example.com');
+  assert.equal(source.document.scenes.invalid.state.draft.email,'scene@example.com');
+  const hidden=await f.owner.execute({action:'edit.apply',projectId,pageId,expectedRevision:changed.projectRevision,operations:[{type:'visibility',nodeIds:['heading'],hidden:true}]},{user:true});
+  source=await f.owner.schema.read({projectId,pageId},f.env);
+  assert.equal(source.document.nodes.heading.hidden,true);
+  assert.ok(hidden.saved);
+});
+
+test('canvas removal of a collection row updates its canonical records and stays removed',async()=>{
+  const f=fixture(),project=await f.owner.execute({action:'project.create',name:'Collection edits'},{user:true}),basis=await f.owner.workbench.project(project.id),pageId=basis.artboards[0].id;
+  const document={schemaVersion:1,id:'records',root:'table',nodes:{table:{kind:'component',use:'table',props:{source:'records',columns:[{id:'name',title:'名称'}]}}},state:{records:[{id:'a',name:'甲'},{id:'b',name:'乙'}]}};
+  const saved=await f.owner.schema.apply({projectId:project.id,pageId,expectedRevision:basis.revision,document},f.env),row=Object.entries(saved.page.artifact.sourceMap).find(([,address])=>address.part==='row'&&address.recordKey==='a')[0];
+  const removed=await f.owner.execute({action:'edit.apply',projectId:project.id,pageId,expectedRevision:saved.projectRevision,operations:[{type:'remove',nodeIds:[row]}]},{user:true});
+  const source=await f.owner.schema.read({projectId:project.id,pageId},f.env);
+  assert.deepEqual(source.document.state.records,[{id:'b',name:'乙'}]);
+  const canvas=await f.owner.editor.read(project.id,pageId,f.env);
+  assert.equal(canvas.document.nodes[row],undefined);
+  assert.ok(removed.saved);
 });

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import {spawn} from 'node:child_process';
+import {spawn,execFileSync,spawnSync} from 'node:child_process';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 import {BuiltinGitEngine,BUILTIN_GIT_COMMAND} from './builtin-git-engine.js';
 
 const scopePrefix='designer-projects/p-runner',remoteUrl='https://example.invalid/team/repository.git',author={name:'Runner',email:'runner@example.test'};
@@ -58,4 +59,28 @@ test('actual managed helper runs init/commit/readSnapshot with an empty executab
   const h=await harness(t,{real:true});await h.run('init',{expectedHead:null});
   const files=[{path:'portable-manifest.json',bytesBase64:Buffer.from('{"portable":true}').toString('base64')},{path:'designs/main/pixel.bin',bytesBase64:Buffer.from([0,255,13,10]).toString('base64')}],saved=await h.run('commit',{expectedHead:null,files,message:'Portable snapshot without installed git',author}),read=await h.run('readSnapshot',{ref:'head'});
   assert.equal(saved.created,true);assert.equal(read.head,saved.head);assert.deepEqual(read.files,files.sort((a,b)=>a.path.localeCompare(b.path)));assert.equal(h.calls.length,3);assert.equal(h.calls[2].stdoutMaxBytes,190*1024*1024);
+});
+
+test('automatic checkpoint runner narrows writes to local Git and needs no remote or HEAD input',async t=>{
+  const h=await harness(t,{real:true});const saved=await h.engine.run('localCheckpoint',{projectId:'p-runner',files:[{path:'project.json',bytesBase64:Buffer.from('{}').toString('base64')}],message:'Automatic local save'},{policy:h.policy});
+  assert.equal(saved.created,true);assert.equal(h.calls[0].sandboxPolicy.workspaceRoot,path.join(h.root,'.git'));
+  assert.equal(JSON.parse(h.calls[0].stdin).remoteUrl,undefined);
+  await assert.rejects(h.engine.run('localCheckpoint',{projectId:'p-runner',files:[]},{policy:{...h.policy,mode:'read-only'}}),{code:'FS_SANDBOX_DENIED'});
+});
+
+test('a linked plugin launches the physical helper and receives a JSON CLI receipt',async t=>{
+  const h=await harness(t),alias=path.join(h.root,'linked-plugin');
+  await fs.symlink(path.dirname(fileURLToPath(import.meta.url)),alias);
+  const command=execFileSync(process.execPath,['--preserve-symlinks','--input-type=module','-e',
+    'const module=await import(process.argv[1]);process.stdout.write(module.BUILTIN_GIT_COMMAND);',
+    pathToFileURL(path.join(alias,'builtin-git-engine.js')).href],{encoding:'utf8'});
+  assert.equal(command.includes(path.join(alias,'builtin-git-helper.js')),false);
+  const result=spawnSync('/bin/sh',['-c',command],{input:'{}',encoding:'utf8'});
+  assert.equal(result.status,1);
+  assert.deepEqual(JSON.parse(result.stdout),{ok:false,error:{code:'GIT_INVALID_OPERATION',message:'Unknown built-in Git operation'}});
+  const linked=spawnSync(process.execPath,[path.join(alias,'builtin-git-helper.js')],{
+    input:'{}',encoding:'utf8',env:{...process.env,ELECTRON_RUN_AS_NODE:'1'},
+  });
+  assert.equal(linked.status,1);
+  assert.deepEqual(JSON.parse(linked.stdout),JSON.parse(result.stdout));
 });

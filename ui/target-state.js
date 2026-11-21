@@ -1,3 +1,4 @@
+import {labelSelection} from '../editor/selection-labels.js';
 const isFileTarget=target=>!!target?.path&&['file','source-file'].includes(target.type);
 const idsOf=selection=>[...new Set((selection?.nodeIds||[selection?.nodeId]).filter(Boolean))];
 const identity=target=>JSON.stringify([target?.projectId,target?.designId,target?.pageId,target?.type,target?.sourceId,target?.fileId,target?.resourceId,target?.path,idsOf(target),target?.sourceSelection]);
@@ -10,7 +11,7 @@ export function selectionForSubmission(selection,target={}) {
   value.pageId??=target.pageId;value.artifact??=first?.artifact;
   for(const key of ['documentEpoch','renderEpoch','sceneId'])value[key]??=first?.[key];
   if(!value.nodeIds?.length&&value.objects?.length)value.nodeIds=value.objects.map(row=>row.instanceId||row.nodeId||row.id).filter(Boolean);
-  return value;
+  return labelSelection(value);
 }
 
 export function sourceTemplateConfirmation(selection) {

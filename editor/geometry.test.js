@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {pageWithViewViewport,savedViewportOf,viewportOf,pagePoint,worldPoint,dragPagePosition,zoomAround,rectangle,flowDropIndex,mergeMeasurements,commonValue,relativePath,topmostIds,sharedContext,fitBounds,artifactOf,isFrameworkArtifact,artifactIdentity,assertCanvasOperations,selectionMetadata,frameworkOperations,sourceEditable,sourceDragOperations,requiresSourceTemplateConfirmation,sourceEditMessage} from './geometry.js';
+import {hitSelectionIds,pageWithContentHeight,pageWithViewViewport,savedViewportOf,viewportOf,pagePoint,worldPoint,dragPagePosition,zoomAround,rectangle,flowDropIndex,mergeMeasurements,commonValue,relativePath,topmostIds,sharedContext,fitBounds,artifactOf,isFrameworkArtifact,artifactIdentity,assertCanvasOperations,selectionMetadata,frameworkOperations,sourceEditable,sourceDragOperations,requiresSourceTemplateConfirmation,sourceEditMessage} from './geometry.js';
 
 test('temporary device viewports drive frame geometry while retaining saved page settings',()=>{
   const saved={id:'a',viewport:{width:1440,height:1800}},mobile=pageWithViewViewport(saved,{device:'mobile',viewport:{width:390,height:844}});
@@ -74,4 +74,40 @@ test('framework source edits are denied before a save while page geometry remain
   assert.throws(()=>assertCanvasOperations({}, {artifact:{kind}}, [{type:'text'}]),error=>error.code==='FRAMEWORK_SOURCE_EDIT_REQUIRED');
  }
  assert.doesNotThrow(()=>assertCanvasOperations({nodes:{}},null,[{type:'text'}]));
+});
+
+test('picker clicks toggle multiple elements and a context click preserves the selected group',()=>{
+  const first=hitSelectionIds([], 'heading', {additive:true});
+  const both=hitSelectionIds(first, 'button', {additive:true});
+  assert.deepEqual(both,['heading','button']);
+  assert.deepEqual(hitSelectionIds(both,'heading',{additive:true}),['button']);
+  assert.deepEqual(hitSelectionIds(both,'heading',{additive:true,context:true}),both);
+  assert.deepEqual(hitSelectionIds(both,'input',{additive:true,context:true}),['input']);
+  assert.deepEqual(hitSelectionIds(both,'heading'),both);
+  assert.deepEqual(hitSelectionIds(both,'heading',{double:true}),['heading']);
+});
+
+test('editing frames expand to complete content while preview and saved dimensions stay fixed',()=>{
+  const page={id:'long-page',viewport:{width:1440,height:900}};
+  const expanded=pageWithContentHeight(page,'edit',42137.4);
+  assert.deepEqual(expanded.viewport,{width:1440,height:42138});
+  assert.deepEqual(expanded.previewViewport,page.viewport);
+  assert.deepEqual(savedViewportOf(expanded),page.viewport);
+  assert.equal(pageWithContentHeight(page,'preview',42137.4),page);
+  assert.equal(pageWithContentHeight(page,'edit',300),page);
+  assert.equal(pageWithContentHeight(page,'edit',NaN),page);
+  assert.deepEqual(page.viewport,{width:1440,height:900});
+  const mobile=pageWithViewViewport(page,{device:'mobile',viewport:{width:390,height:844}});
+  const fullMobile=pageWithContentHeight(mobile,'edit',2500);
+  assert.deepEqual(fullMobile.previewViewport,{width:390,height:844});
+  assert.deepEqual(savedViewportOf(fullMobile),page.viewport);
+});
+
+test('one live page can shrink and grow while retaining its authored viewport units',()=>{
+  const page={viewport:{width:1440,height:1000}};
+  for(const height of [250,48000,760]){
+    const live=pageWithContentHeight(page,'live',height);
+    assert.equal(live.viewport.height,height);
+    assert.deepEqual(live.previewViewport,page.viewport);
+  }
 });

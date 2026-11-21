@@ -5,6 +5,11 @@ import {loadProjectPreview} from './project-preview.js';
 import {normalizeDocument} from '../document-model.js';
 const base='http://localhost/api/designer/resource/'+('a'.repeat(32))+'/p-one/designs/web/pages/home/';
 const empty='<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body></body></html>';
+test('script-mounted framework pages use the default cover while static framework content remains visible',()=>{
+  const head='<head><script data-dsh-framework-runtime="true">runtime()</script><style>body{background:#f7f8fa}</style></head>';
+  assert.equal(projectPreviewDocument(`${head}<body><div id="root"></div><script>mount()</script></body>`),null);
+  assert.match(projectPreviewDocument(`${head}<body><div id="root"><h1>Saved content</h1></div></body>`),/<h1>Saved content<\/h1>/);
+});
 test('initial empty HTML and its controlled document metadata use the default cover',()=>{
   for(const html of ['',empty,normalizeDocument(empty).html,
     '<html><head><title>Project name</title><style>/* Design styles */</style></head><body> \n<!-- Start here --> </body></html>']){

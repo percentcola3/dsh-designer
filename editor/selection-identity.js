@@ -5,7 +5,8 @@ export function createSelectionIdentity(config={},environment={}){
   const artifact=config.artifact,kind=artifact?.kind||(!artifact?'html':null),framework=kind==='react'||kind==='vue';
   const relativePath=value=>typeof value==='string'&&value.length>0&&value.length<=2048&&!/[\\\x00-\x1f?#%<>"'`]/.test(value)&&!value.startsWith('/')&&!/^[A-Za-z][\w+.-]*:/.test(value)&&value.split('/').every(part=>part&&part!=='.'&&part!=='..');
   const version=value=>typeof value==='string'&&value.length>0&&value.length<=256||typeof value==='number'&&Number.isFinite(value);
-  const validArtifact=(!artifact||own(artifact,'kind'))&&(kind==='html'||framework&&['kind','entry','version','buildId','manifest'].every(key=>own(artifact,key))&&relativePath(artifact.entry)&&version(artifact.version)&&typeof artifact.buildId==='string'&&artifact.buildId.length>0&&artifact.buildId.length<=256&&Array.isArray(artifact.manifest));
+  const sourceIdentity=artifact&&['entry','version','buildId'].every(key=>own(artifact,key))&&relativePath(artifact.entry)&&version(artifact.version)&&typeof artifact.buildId==='string'&&artifact.buildId.length>0&&artifact.buildId.length<=256;
+  const validArtifact=(!artifact||own(artifact,'kind'))&&(kind==='html'||kind==='schema'&&sourceIdentity||framework&&sourceIdentity&&own(artifact,'manifest')&&Array.isArray(artifact.manifest));
   const manifest=new Map(),seen=new Set();
   if(framework&&validArtifact)for(const item of artifact.manifest){
     if(!item||!own(item,'id')||typeof item.id!=='string'||!/^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/.test(item.id))continue;

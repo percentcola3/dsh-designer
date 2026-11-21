@@ -1,10 +1,12 @@
 import path from 'node:path';
+import {realpathSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {fail,policyAllowsTarget} from './store.js';
 
-const OPERATIONS=new Set(['init','status','branches','commit','fetch','push','fastForward','readSnapshot','detect','probe']);
-const WRITES=new Set(['init','commit','fetch','push','fastForward']);
-const HELPER=fileURLToPath(new URL('./builtin-git-helper.js',import.meta.url));
+const OPERATIONS=new Set(['init','status','branches','commit','fetch','push','fastForward','readSnapshot','detect','probe','localCheckpoint']);
+const WRITES=new Set(['init','commit','fetch','push','fastForward','localCheckpoint']);
+// Linked plugins must launch the physical entry path so Node's CLI guard runs.
+const HELPER=realpathSync(fileURLToPath(new URL('./builtin-git-helper.js',import.meta.url)));
 const quote=value=>"'"+String(value).replace(/'/g,"'\\''")+"'";
 // Only these bundled paths appear in command text. All project data and secrets
 // are JSON stdin, including repository URLs and binary portable snapshot files.
@@ -26,10 +28,10 @@ export class BuiltinGitEngine {
     const root=await fs.resolve(physical,{signal}),projectRoot=fs.processPath(root),info=await fs.stat(root,signal);
     if(info?.type!=='directory'||!path.isAbsolute(projectRoot))fail('GIT_PROJECT_NOT_FOUND','The project directory is unavailable');
     const mirror=await fs.resolve(path.join(projectRoot,'.workbench','git-sync','repository'),{signal});
-    if(!fs.contains(root,mirror)||fs.processPath(mirror)!==path.join(projectRoot,'.workbench','git-sync','repository'))fail('GIT_UNSAFE_PATH','Private Git repository canonical identity changed');
+    if(operation!=='localCheckpoint'&&(!fs.contains(root,mirror)||fs.processPath(mirror)!==path.join(projectRoot,'.workbench','git-sync','repository')))fail('GIT_UNSAFE_PATH','Private Git repository canonical identity changed');
     if(WRITES.has(operation)){
       if(policy.mode==='read-only'||!await policyAllowsTarget(fs,policy,root,signal))fail('FS_SANDBOX_DENIED','The native policy does not allow writes to this project');
-      if(!own(input,'expectedHead')||input.expectedHead!==null&&!/^[a-f0-9]{40}$/.test(input.expectedHead))fail('GIT_HEAD_REQUIRED','Pass the exact expected HEAD, or null for an unborn branch');
+      if(operation!=='localCheckpoint'&&(!own(input,'expectedHead')||input.expectedHead!==null&&!/^[a-f0-9]{40}$/.test(input.expectedHead)))fail('GIT_HEAD_REQUIRED','Pass the exact expected HEAD, or null for an unborn branch');
     }
     if(this.pending.has(projectRoot))fail('GIT_BUSY','A Git operation is already running for this project');
     this.pending.add(projectRoot);
@@ -38,7 +40,7 @@ export class BuiltinGitEngine {
       const request={operation,projectRoot};
       for(const key of ['branch','remoteUrl','expectedHead','scopePrefix','files','message','author','credentials','ref','timeoutMs'])if(own(input,key))request[key]=clone(input[key]);
       const stdin=JSON.stringify(request);if(Buffer.byteLength(stdin)>LIMIT)fail('GIT_INPUT_LIMIT','Git snapshot input exceeds the supported size');
-      const currentPolicy={...policy,mode:policy.mode==='read-only'?'read-only':'workspace-write',workspaceRoot:projectRoot,additionalWritableRoots:[]};
+      const currentPolicy={...policy,mode:policy.mode==='read-only'?'read-only':'workspace-write',workspaceRoot:operation==='localCheckpoint'?path.join(projectRoot,'.git'):projectRoot,additionalWritableRoots:[]};
       // A read operation under a writable parent may still use a read-only helper.
       // fetch/probe network transport uses Node; no system git or ssh is invoked.
       if(!WRITES.has(operation))currentPolicy.mode='read-only';

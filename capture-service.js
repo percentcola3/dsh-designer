@@ -14,7 +14,7 @@ const encodePath=value=>value.split('/').map(encodeURIComponent).join('/');
 const controlStop=error=>/EGO_.*(?:CONTROL|TASK_SPACE|OWNERSHIP|PERMISSION|HANDOFF)|(?:FS_)?SANDBOX_DENIED|PERMISSION_DENIED|POLICY_DENIED|space.*(?:inactive|unassigned)|user.*(?:control|take.?over)/i.test(`${error?.code||''} ${error?.message||''}`);
 const receipt=value=>`console.log(${JSON.stringify(BROWSER_RESULT_MARKER)}+JSON.stringify({ok:true,value:${value}}));`;
 function check(env){env.signal?.throwIfAborted();if(Date.now()>env.deadline)fail('CAPTURE_TIMEOUT','Image capture exceeded its time budget');}
-function b64(value,max=MAX_FILE){if(typeof value!=='string'||value.length>Math.ceil(max/3)*4||!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value))fail('INVALID_CAPTURE_BYTES','Capture file bytes must be bounded canonical base64');const bytes=Buffer.from(value,'base64');if(bytes.toString('base64')!==value)fail('INVALID_CAPTURE_BYTES','Capture file base64 is not canonical');return bytes;}
+function b64(value,max=MAX_FILE){if(typeof value!=='string'||value.length>Math.ceil(max/3)*4||value.length%4!==0||/[^A-Za-z0-9+/=]/.test(value))fail('INVALID_CAPTURE_BYTES','Capture file bytes must be bounded canonical base64');const bytes=Buffer.from(value,'base64');if(bytes.toString('base64')!==value)fail('INVALID_CAPTURE_BYTES','Capture file base64 is not canonical');return bytes;}
 function copiedBytes(value){if(!Buffer.isBuffer(value)&&!(value instanceof Uint8Array))fail('INVALID_CAPTURE_BYTES','Native capture files require Buffer/Uint8Array bytes or canonical base64');if(value.byteLength>MAX_FILE)fail('CAPTURE_RESOURCE_LIMIT','Capture file exceeds 32 MiB');return Buffer.from(value);}
 function mimeFor(file){const ext=extension(file.path),expected=MIME[ext];if(!expected)return null;let actual=String(file.mimeType||expected).split(';')[0].trim().toLowerCase();if(['application/javascript','application/ecmascript','text/ecmascript'].includes(actual))actual='text/javascript';actual=({'application/font-woff':'font/woff','application/font-woff2':'font/woff2','application/x-font-ttf':'font/ttf','application/x-font-opentype':'font/otf'})[actual]||actual;if(actual!==expected)fail('CAPTURE_MIME_MISMATCH','A static resource MIME does not match its filename',{path:file.path});return actual;}
 function validateImage(bytes,format){const valid=format==='png'?bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])):format==='jpeg'?bytes[0]===255&&bytes[1]===216&&bytes[2]===255:bytes.subarray(0,4).toString()==='RIFF'&&bytes.subarray(8,12).toString()==='WEBP';if(!valid)fail('CAPTURE_FORMAT_MISMATCH','Chromium did not return the requested actual image format');if(bytes.length>MAX_FILE)fail('CAPTURE_IMAGE_LIMIT','Captured image exceeds 32 MiB');return format==='jpeg'?'image/jpeg':`image/${format}`;}
@@ -27,6 +27,15 @@ export async function prepareCapturePage(options){
   const timeout=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   if(document.fonts)await Promise.race([document.fonts.ready,timeout(3000)]);
   await Promise.race([Promise.all([...document.images].map(image=>image.complete?Promise.resolve():new Promise(resolve=>{image.addEventListener('load',resolve,{once:true});image.addEventListener('error',resolve,{once:true});}))),timeout(3000)]);
+  if(options.liveScroll){
+    for(const el of document.querySelectorAll('[data-snapshot-top]')){
+      if(el.dataset.snapshotTop==='modal'&&el.localName==='dialog'){el.removeAttribute('open');el.showModal();}
+      else if(el.hasAttribute('popover'))el.showPopover();
+    }
+    for(const el of document.querySelectorAll('[data-preview-scroll-x],[data-preview-scroll-y]'))
+      el.scrollTo({left:Number(el.dataset.previewScrollX)||0,top:Number(el.dataset.previewScrollY)||0,behavior:'instant'});
+    scrollTo({left:options.liveScroll.x,top:options.liveScroll.y,behavior:'instant'});
+  }
   const runtime=window.__DSH_DESIGN_RUNTIME__;
   if(options.scene){if(!runtime?.setScene||runtime.setScene(options.scene)===false)return {error:{code:'CAPTURE_SCENE_UNAVAILABLE',message:'Requested scene cannot be activated in the saved runtime'}};await Promise.race([new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))),timeout(250)]);}
   document.documentElement.setAttribute('data-dsh-view-mode','preview');
@@ -55,7 +64,18 @@ export class CaptureService {
     if(entry!==page.htmlPath)fail('PROJECT_SCOPE','Capture entry must be the selected saved page path');
     if(!Array.isArray(files)||typeof html!=='string'){
       if(typeof this.owner.delivery?.snapshot!=='function')fail('CAPTURE_EXPORT_UNAVAILABLE','The finite delivery snapshot adapter is unavailable');
-      const frozen=await this.owner.delivery.snapshot(project,{pageId:page.id,format:'png',editorMarks:!!payload.editorMarks},env);files=frozen.files;entry=logical(frozen.pages[0].htmlPath);html=Buffer.from(files.find(f=>f.path===entry).bytes).toString('utf8');
+      const frozen=await this.owner.delivery.snapshot(project,{pageId:page.id,format:'png',editorMarks:!!payload.editorMarks},env);files=frozen.files;entry=logical(frozen.pages[0].htmlPath);
+      if(payload.livePreviewHtml!==undefined){
+        // Only reuse dependencies admitted for this saved page. Never run source
+        // scripts or event handlers supplied by a live iframe snapshot.
+        const tree=parse(payload.livePreviewHtml);
+        const clean=node=>{
+          if(node.attrs)node.attrs=node.attrs.filter(attr=>!/^on/i.test(attr.name));
+          if(node.childNodes){node.childNodes=node.childNodes.filter(child=>child.tagName!=='script');node.childNodes.forEach(clean);}
+          if(node.content)clean(node.content);
+        };
+        clean(tree);html=serialize(tree);files=files.filter(file=>file.path!==entry);
+      }else html=Buffer.from(files.find(f=>f.path===entry).bytes).toString('utf8');
     }
     if(files.length>4000||Buffer.byteLength(html)>MAX_FILE)fail('CAPTURE_RESOURCE_LIMIT','Capture snapshot exceeds resource limits');
     const supplied=new Map();let total=0;
@@ -116,23 +136,63 @@ export class CaptureService {
     const nodeIds=payload.nodeIds||[];if(!Array.isArray(nodeIds)||nodeIds.length>200||new Set(nodeIds).size!==nodeIds.length||nodeIds.some(v=>typeof v!=='string'||v.length>128))fail('INVALID_CAPTURE_NODES','Choose at most 200 distinct stable nodes');
     if(payload.region&&(!['x','y','width','height'].every(k=>Number.isFinite(payload.region[k]))||payload.region.x<0||payload.region.y<0||payload.region.width<=0||payload.region.height<=0||payload.region.width>10000||payload.region.height>20000))fail('INVALID_CAPTURE_REGION','Region must use bounded positive document CSS pixels');
     const snapshot=await this.prepare(payload,env);check(env);const width=snapshot.viewport.width,height=snapshot.viewport.height;if(!Number.isInteger(width)||!Number.isInteger(height)||width<100||width>10000||height<100||height>20000||width*height>MAX_PIXELS)fail('INVALID_CAPTURE_VIEWPORT','Capture viewport exceeds the bounded 10000×20000 / 80MP canvas');
+    if(payload.livePreviewHtml!==undefined&&payload.region){
+      const {x,y,width:regionWidth,height:regionHeight}=payload.region;
+      if(x+regionWidth>width+0.001||y+regionHeight>height+0.001)fail('INVALID_CAPTURE_REGION','框选区域已超出当前预览，请重新框选。');
+    }
     const cap=this.issue(snapshot),captureId='c-'+randomUUID();const browser=this.owner.imports?.browser,scope=this.owner.imports?.browserScope;if(!browser?._serial||!browser?._run||!scope?.run){this.revoke(cap.token);fail('CAPTURE_BROWSER_UNAVAILABLE','The existing managed browser and policy scope are required');}
+    const warnings=[...snapshot.warnings];
     let entry;const abort=()=>this.revoke(cap.token);env.signal.addEventListener('abort',abort,{once:true});
     try{return await scope.run(env.policy,()=>browser._serial(async()=>{
-      try{check(env);if(browser.disposed)fail('CAPTURE_BROWSER_UNAVAILABLE','The shared browser is disposed');const initial=browser.spaceId==null&&!browser.browsers.size;
-        const created=await browser._run(`const task=await taskSpace(${JSON.stringify(browser.spaceId??browser.spaceName)}); const page=${initial?"task.page('p1')":'await task.newPage()'}; ${receipt('{spaceId:task.spaceId,label:page.label}')}`,Math.max(1,Math.min(10000,env.deadline-Date.now()-5000)));
+      try{check(env);if(browser.disposed)fail('CAPTURE_BROWSER_UNAVAILABLE','The shared browser is disposed');
+        const created=await this.acquirePage(browser,env);
         browser.spaceId=created.spaceId;entry={browserId:captureId,projectId:snapshot.projectId,spaceId:created.spaceId,label:created.label,width,height,responses:new Map()};browser.browsers.set(captureId,entry);this.pages.set(captureId,{entry,policy:env.policy});check(env);
-        const options={nodeIds,background:payload.background!==false,editorMarks:payload.editorMarks===true,scene:payload.scene||payload.sceneId||null};
+        const options={nodeIds,...(payload.livePreviewHtml!==undefined?{liveScroll:{x:Math.max(0,Number(payload.scroll?.x)||0),y:Math.max(0,Number(payload.scroll?.y)||0)}}:{}),background:payload.background!==false,editorMarks:payload.editorMarks===true,scene:payload.scene||payload.sceneId||null};
         const entryURL=cap.prefix+encodePath(cap.entryPath);
-        const result=await browser._run(`const task=await taskSpace(${JSON.stringify(entry.spaceId)});const page=task.page(${JSON.stringify(entry.label)}); await page.cdp('Runtime.enable'); await page.cdp('Network.enable'); await page.cdp('Emulation.setDeviceMetricsOverride',{width:${width},height:${height},deviceScaleFactor:1,mobile:false}); await page.cdp('Emulation.setDefaultBackgroundColorOverride',{color:${JSON.stringify(options.background?{r:255,g:255,b:255,a:1}:{r:0,g:0,b:0,a:0})}});await page.goto(${JSON.stringify(entryURL)},{timeout:15000});const presentation=await page.evaluate(${prepareCapturePage.toString()},${JSON.stringify(options)});if(presentation.error)throw Object.assign(new Error(presentation.error.message),{code:presentation.error.code}); const actualURL=await page.url();if(actualURL!==${JSON.stringify(entryURL)})throw Object.assign(new Error('Saved runtime navigated away from its frozen capture page'),{code:'CAPTURE_NAVIGATION_BLOCKED'});const metrics=await page.cdp('Page.getLayoutMetrics');const content=metrics.cssContentSize||metrics.contentSize;const bounds={width:Math.max(${width},Math.ceil(content.width)),height:Math.max(${height},Math.ceil(content.height))};let clip=${JSON.stringify(payload.region||null)};if(!clip&&presentation.boxes.length){const boxes=presentation.boxes;clip={x:Math.min(...boxes.map(b=>b.x)),y:Math.min(...boxes.map(b=>b.y)),width:Math.max(...boxes.map(b=>b.x+b.width))-Math.min(...boxes.map(b=>b.x)),height:Math.max(...boxes.map(b=>b.y+b.height))-Math.min(...boxes.map(b=>b.y))};}if(!clip)clip={x:0,y:0,width:${payload.fullPage===false?width:'bounds.width'},height:${payload.fullPage===false?height:'bounds.height'}};const left=Math.floor(clip.x),top=Math.floor(clip.y);clip={x:left,y:top,width:Math.ceil(clip.x+clip.width)-left,height:Math.ceil(clip.y+clip.height)-top,scale:1};if(clip.x<0||clip.y<0||clip.width<1||clip.height<1||clip.width>10000||clip.height>20000||clip.width*clip.height>${MAX_PIXELS}||clip.x+clip.width>bounds.width+1||clip.y+clip.height>bounds.height+1)throw Object.assign(new Error('Requested image bounds exceed the saved page or capture pixel limit'),{code:'CAPTURE_BOUNDS'});let image;try{image=await page.cdp('Page.captureScreenshot',{format:${JSON.stringify(format)},${format==='png'?'':`quality:${quality},`}fromSurface:true,captureBeyondViewport:true,clip},{timeout:12000});}catch(error){if(/format|parameter|not supported/i.test(error.message))error.code='CAPTURE_FORMAT_UNSUPPORTED';throw error;}if(image.data.length>${Math.ceil(MAX_FILE/3)*4})throw Object.assign(new Error('Image exceeds 32 MiB'),{code:'CAPTURE_IMAGE_LIMIT'});const events=await page.events();const exceptions=events.filter(e=>e.method==='Runtime.exceptionThrown').map(e=>({type:'runtime-error',message:String(e.params?.exceptionDetails?.text||'Runtime exception').slice(0,300)})).slice(0,10); ${receipt('{bytesBase64:image.data,width:clip.width,height:clip.height,clip,presentation,exceptions,bounds}')}`,Math.max(1,Math.min(40000,env.deadline-Date.now()-5000)));
-        check(env);if(payload.allowIncomplete!==true&&(result.presentation.imageFailures||result.presentation.fontFailures||result.presentation.fontStatus==='loading'||result.exceptions.length))fail('CAPTURE_RENDER_INCOMPLETE','Saved runtime or assets did not finish rendering; fix the reported dependencies before exporting',{imageFailures:result.presentation.imageFailures,fontFailures:result.presentation.fontFailures||0,fontStatus:result.presentation.fontStatus,errors:result.exceptions});const bytes=b64(result.bytesBase64),mimeType=validateImage(bytes,format);return {bytesBase64:bytes.toString('base64'),mimeType,width:result.width,height:result.height,format,metadata:{captureId,projectId:snapshot.projectId,pageId:snapshot.pageId,projectRevision:snapshot.projectRevision,pageRevision:snapshot.pageRevision,savedSourceHash:snapshot.savedSourceHash,sourceVersion:{pageRevision:snapshot.pageRevision,sourceHash:snapshot.savedSourceHash},boundsVersion:{pageRevision:snapshot.pageRevision,sourceHash:snapshot.savedSourceHash,viewport:{width,height},scene:result.presentation.runtime.scene||null},sourceHtmlHash:cap.files.get(cap.entryPath).sha256,resourceCount:cap.files.size-1,scope:payload.region?'region':nodeIds.length?'selection':payload.fullPage===false?'viewport':'page',nodeIds,region:result.clip,background:options.background,editorMarks:options.editorMarks,editorMarkCount:result.presentation.marked,viewport:result.presentation.viewport||{width,height},requestedViewport:{width,height},documentBounds:result.bounds,runtime:result.presentation.runtime,fontStatus:result.presentation.fontStatus,fontFailures:result.presentation.fontFailures||0,imageFailures:result.presentation.imageFailures,capabilityRevoked:true},warnings:[...snapshot.warnings,...result.exceptions,...(result.presentation.imageFailures?[{code:'CAPTURE_IMAGE_LOAD_FAILED',count:result.presentation.imageFailures}]:[])]};
-      }catch(error){if(controlStop(error)&&entry)this.pages.get(entry.browserId).controlStopped=true;throw error;}finally{if(entry&&!this.pages.get(entry.browserId)?.controlStopped)await this.closeOwned(entry,env.policy,browser);}
+        const result=await browser._run(`const task=await taskSpace(${JSON.stringify(entry.spaceId)});const page=task.page(${JSON.stringify(entry.label)}); await page.cdp('Runtime.enable'); await page.cdp('Network.enable'); await page.cdp('Emulation.setDeviceMetricsOverride',{width:${width},height:${height},deviceScaleFactor:1,mobile:false}); await page.cdp('Emulation.setDefaultBackgroundColorOverride',{color:${JSON.stringify(options.background?{r:255,g:255,b:255,a:1}:{r:0,g:0,b:0,a:0})}});await page.goto(${JSON.stringify(entryURL)},{timeout:15000});const presentation=await page.evaluate(${prepareCapturePage.toString()},${JSON.stringify(options)});if(presentation.error)throw Object.assign(new Error(presentation.error.message),{code:presentation.error.code}); const actualURL=await page.url();if(actualURL!==${JSON.stringify(entryURL)})throw Object.assign(new Error('Saved runtime navigated away from its frozen capture page'),{code:'CAPTURE_NAVIGATION_BLOCKED'});const metrics=await page.cdp('Page.getLayoutMetrics');const content=metrics.cssContentSize||metrics.contentSize;const bounds={width:Math.max(${width},Math.ceil(content.width)),height:Math.max(${height},Math.ceil(content.height))};let clip=${JSON.stringify(payload.region||null)};if(${Boolean(options.liveScroll)}){const offset=metrics.cssVisualViewport||metrics.visualViewport;const region=clip||{x:0,y:0,width:${width},height:${height}};clip={...region,x:offset.pageX+region.x,y:offset.pageY+region.y};}if(!clip&&presentation.boxes.length){const boxes=presentation.boxes;clip={x:Math.min(...boxes.map(b=>b.x)),y:Math.min(...boxes.map(b=>b.y)),width:Math.max(...boxes.map(b=>b.x+b.width))-Math.min(...boxes.map(b=>b.x)),height:Math.max(...boxes.map(b=>b.y+b.height))-Math.min(...boxes.map(b=>b.y))};}if(!clip)clip={x:0,y:0,width:${payload.fullPage===false?width:'bounds.width'},height:${payload.fullPage===false?height:'bounds.height'}};const left=Math.floor(clip.x),top=Math.floor(clip.y);clip={x:left,y:top,width:Math.ceil(clip.x+clip.width)-left,height:Math.ceil(clip.y+clip.height)-top,scale:1};if(clip.x<0||clip.y<0||clip.width<1||clip.height<1||clip.width>10000||clip.height>20000||clip.width*clip.height>${MAX_PIXELS}||clip.x+clip.width>bounds.width+1||clip.y+clip.height>bounds.height+1)throw Object.assign(new Error('Requested image bounds exceed the saved page or capture pixel limit'),{code:'CAPTURE_BOUNDS'});let image;try{image=await page.cdp('Page.captureScreenshot',{format:${JSON.stringify(format)},${format==='png'?'':`quality:${quality},`}fromSurface:true,captureBeyondViewport:true,clip},{timeout:12000});}catch(error){if(/format|parameter|not supported/i.test(error.message))error.code='CAPTURE_FORMAT_UNSUPPORTED';throw error;}if(image.data.length>${Math.ceil(MAX_FILE/3)*4})throw Object.assign(new Error('Image exceeds 32 MiB'),{code:'CAPTURE_IMAGE_LIMIT'});const events=await page.events();const exceptions=events.filter(e=>e.method==='Runtime.exceptionThrown').map(e=>({type:'runtime-error',message:String(e.params?.exceptionDetails?.text||'Runtime exception').slice(0,300)})).slice(0,10); ${receipt('{bytesBase64:image.data,width:clip.width,height:clip.height,clip,presentation,exceptions,bounds}')}`,Math.max(1,Math.min(40000,env.deadline-Date.now()-5000)));
+        check(env);if(payload.allowIncomplete!==true&&(result.presentation.imageFailures||result.presentation.fontFailures||result.presentation.fontStatus==='loading'||result.exceptions.length))fail('CAPTURE_RENDER_INCOMPLETE','Saved runtime or assets did not finish rendering; fix the reported dependencies before exporting',{imageFailures:result.presentation.imageFailures,fontFailures:result.presentation.fontFailures||0,fontStatus:result.presentation.fontStatus,errors:result.exceptions});const bytes=b64(result.bytesBase64),mimeType=validateImage(bytes,format);warnings.push(...result.exceptions);if(result.presentation.imageFailures)warnings.push({code:'CAPTURE_IMAGE_LOAD_FAILED',count:result.presentation.imageFailures});return {bytesBase64:bytes.toString('base64'),mimeType,width:result.width,height:result.height,format,metadata:{captureId,projectId:snapshot.projectId,pageId:snapshot.pageId,projectRevision:snapshot.projectRevision,pageRevision:snapshot.pageRevision,savedSourceHash:snapshot.savedSourceHash,sourceVersion:{pageRevision:snapshot.pageRevision,sourceHash:snapshot.savedSourceHash},boundsVersion:{pageRevision:snapshot.pageRevision,sourceHash:snapshot.savedSourceHash,viewport:{width,height},scene:result.presentation.runtime.scene||null},sourceHtmlHash:cap.files.get(cap.entryPath).sha256,resourceCount:cap.files.size-1,scope:payload.region?'region':nodeIds.length?'selection':payload.fullPage===false?'viewport':'page',nodeIds,region:result.clip,background:options.background,editorMarks:options.editorMarks,editorMarkCount:result.presentation.marked,viewport:result.presentation.viewport||{width,height},requestedViewport:{width,height},documentBounds:result.bounds,runtime:result.presentation.runtime,fontStatus:result.presentation.fontStatus,fontFailures:result.presentation.fontFailures||0,imageFailures:result.presentation.imageFailures,capabilityRevoked:true},warnings};
+      }catch(error){if(controlStop(error)&&entry)this.pages.get(entry.browserId).controlStopped=true;throw error;}finally{
+        if(entry&&!this.pages.get(entry.browserId)?.controlStopped){
+          const closed=await this.closeOwned(entry,env.policy,browser);
+          if(!closed)warnings.push({code:'CAPTURE_PAGE_CLOSE_PENDING',message:'The image was captured. The browser has not yet confirmed capture tab cleanup.'});
+        }
+      }
     }));}catch(error){if(env.signal.aborted)throw env.signal.reason;throw error;}finally{env.signal.removeEventListener('abort',abort);this.revoke(cap.token);}
   }
+  async acquirePage(browser,env){
+    const pending=[...this.pages.values()].find(record=>record.closePending&&!record.controlStopped&&record.entry.spaceId===browser.spaceId);
+    const timeout=Math.max(1,Math.min(10000,env.deadline-Date.now()-5000));
+    const initial=browser.spaceId==null&&!browser.browsers.size;
+    // A close can finish after the CLI times out. Only reuse that exact owned label if it is still live.
+    const choose=pending
+      ? `(await task.pages()).find(page=>page.label===${JSON.stringify(pending.entry.label)}) || await task.newPage()`
+      : initial ? "task.page('p1')" : 'await task.newPage()';
+    const created=await browser._run(`const task=await taskSpace(${JSON.stringify(browser.spaceId??browser.spaceName)});const page=${choose};${receipt('{spaceId:task.spaceId,label:page.label}')}`,timeout);
+    if(pending)this.pages.delete(pending.entry.browserId);
+    return created;
+  }
   async closeOwned(entry,policy,browser=this.owner.imports.browser){
-    if(!this.pages.has(entry.browserId))return;
-    await this.owner.imports.browserScope.run(policy,()=>browser._run(`const task=await taskSpace(${JSON.stringify(entry.spaceId)});const page=task.page(${JSON.stringify(entry.label)});await page.close();${receipt('{closed:true}')}`,5000));
-    this.pages.delete(entry.browserId);browser.browsers.delete(entry.browserId);
+    const record=this.pages.get(entry.browserId);
+    if(!record)return true;
+    try{
+      const {closed}=await this.owner.imports.browserScope.run(policy,()=>browser._run(`
+        const task=await taskSpace(${JSON.stringify(entry.spaceId)});
+        const label=${JSON.stringify(entry.label)};
+        const page=${record.closePending?'(await task.pages()).find(page=>page.label===label)':'task.page(label)'};
+        let closed=true;
+        if(page)try{await page.close();}catch(error){
+          if((error.code && error.code!=='BROWSER_OPERATION_FAILED') || !/^page .+ did not close within [0-9]+ms$/i.test(error.message||''))throw error;
+          closed=!(await task.pages()).some(live=>live.label===label);
+        }
+        ${receipt('{closed}')}`,5000));
+      browser.browsers.delete(entry.browserId);
+      if(closed)this.pages.delete(entry.browserId);
+      else record.closePending=true;
+      return closed;
+    }catch(error){
+      if(controlStop(error))record.controlStopped=true;
+      throw error;
+    }
   }
   async dispose(){this.disposed=true;for(const controller of this.controllers)controller.abort(Object.assign(new Error('Capture service stopped'),{code:'CAPTURE_DISPOSED'}));this.capabilities.clear();await Promise.allSettled([...this.pending]);await Promise.allSettled([...this.pages.values()].filter(record=>!record.controlStopped).map(({entry,policy})=>this.closeOwned(entry,policy)));}
 }

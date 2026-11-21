@@ -10,3 +10,10 @@ test('delete calls the soft-delete API without requesting physical file deletion
 test('unchanged values do not create needless revisions',async()=>{for(const [action,values] of [['rename',{name:project.name}],['move',{groupId:'g'}]]){const f=fixture();await projectCardAction(f.api,action,'p',values);assert.equal(f.calls.length,1);}});
 test('invalid inputs and unavailable or foreign projects never mutate',async()=>{for(const [action,values] of [['rename',{name:'  '}],['move',{}],['unknown',{}]]){const f=fixture();await assert.rejects(projectCardAction(f.api,action,'p',values));assert.equal(f.calls.length,0);}for(const state of [{deletedAt:'now'},{id:'other'},{archived:true}]){const f=fixture(state);await assert.rejects(projectCardAction(f.api,'clone','p'));assert.equal(f.calls.length,1);}});
 test('a conflict is surfaced without replaying a metadata mutation',async()=>{let writes=0;await assert.rejects(projectCardAction(async(action)=>{if(action==='project.get')return {project};writes++;throw Object.assign(Error('conflict'),{code:'VERSION_CONFLICT'});},'rename','p',{name:'更新'}),{code:'VERSION_CONFLICT'});assert.equal(writes,1);});
+
+test('recycle-bin restoration uses a fresh revision and includes archived projects',async()=>{
+  for(const removed of [{deletedAt:'2026-11-08',archived:false},{deletedAt:null,archived:true}]){
+    const calls=[],api=async(action,args)=>{calls.push({action,args});return action==='state'?{projects:[{id:'p-restore',revision:9,...removed}]}:{project:{id:'p-restore',revision:10,deletedAt:null,archived:false}};};
+    const saved=await projectCardAction(api,'restore','p-restore');assert.equal(saved.project.revision,10);assert.deepEqual(calls[1],{action:'project.restore',args:{projectId:'p-restore',expectedRevision:9}});
+  }
+});

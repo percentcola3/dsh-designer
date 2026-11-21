@@ -1,6 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {detectMention, applyInsertion, appendReference, mentionCandidates} from './composer-mentions.js';
+import {detectMention, applyInsertion, appendReference, mentionCandidates, mentionFileRows} from './composer-mentions.js';
+
+test('reference tabs keep results inside the selected category while retaining search and scope rules',()=>{
+  const input={variant:'canvas',projectId:'current',query:'参考',projects:[{id:'current',name:'参考当前项目',revision:1},{id:'other',name:'参考项目',revision:2}],knowledge:[{id:'k',name:'参考知识'}],files:[{id:'f',path:'docs/参考.md'}]};
+  for(const kind of ['project','knowledge','file']) {
+    const rows=mentionCandidates({...input,kind});
+    assert.equal(rows.length,1);assert.equal(rows[0].kind,kind);
+  }
+  assert.deepEqual(mentionCandidates({...input,kind:'directory'}),[]);
+  assert.deepEqual(mentionCandidates({...input,kind:'file',query:'不存在'}),[]);
+  assert.deepEqual(mentionCandidates({...input,variant:'home',kind:'knowledge'}),[]);
+});
 
 test('knowledge mentions stay project-scoped, hide unavailable libraries and refresh only explicit library selections',()=>{
   const knowledge=[{id:'k-business',name:'业务代码',contentRevision:3},{id:'k-broken',name:'业务坏库',unavailable:true},{id:'k-archived',name:'业务归档',archived:true},{id:'k-business',name:'业务重复'}];
@@ -54,4 +65,20 @@ test('home excludes files; canvas filters unavailable entries and uses stable fi
   assert.deepEqual(mentionCandidates({...input, variant: 'home'}).map(c => c.kind), ['project']);
   assert.deepEqual(mentionCandidates({...input, variant: 'canvas', query: 'src/app'}).map(c => c.item.fileId), ['f']);
   assert.deepEqual(mentionCandidates({...input, variant: 'canvas'}).map(c => c.kind), ['project', 'file']);
+});
+
+test('reference rows retain file identity through folder collapse and scoped search',()=>{
+  const input={variant:'canvas',projectId:'p',files:[
+    {fileId:'root',path:'README.md'},
+    {type:'directory',name:'docs',sourceId:'s',children:[{fileId:'read',name:'README.md'},{fileId:'other',name:'notes.txt'}]}
+  ]};
+  const candidates=mentionCandidates(input);
+  const rows=mentionFileRows(candidates,{},false);
+  const dir=rows.find(row=>row.node.path==='docs');
+  assert.deepEqual(rows.filter(row=>row.kind==='file').map(row=>row.item.fileId).sort(),['other','read','root']);
+  assert.equal(rows.find(row=>row.item?.fileId==='read').item.sourceId,'s');
+  const closed=mentionFileRows(candidates,{[dir.key]:false},false);
+  assert.deepEqual(closed.filter(row=>row.kind==='file').map(row=>row.item.fileId),['root']);
+  const matches=mentionFileRows(mentionCandidates({...input,query:'docs/read'}),{},true);
+  assert.deepEqual(matches.map(row=>row.node.name),['s','docs','README.md']);
 });

@@ -17,6 +17,10 @@ export const KNOWLEDGE_ACTIONS=Object.freeze({
   'knowledge.reference':{projectId:'required; owner only',knowledgeId:'required; one-time readonly reference, no implicit project binding'},
   'knowledge.project.bind':{projectId:'required; owner only',expectedRevision:'required project CAS',knowledgeIds:'array of available library IDs'},
   'knowledge.document.get':{knowledgeId:'required; owner only',documentId:'required; returns owner-only original URLs'},
+  'knowledge.document.write':{knowledgeId:'required; owner only',expectedRevision:'required CAS',documentId:'existing text file; omit to create',expectedSha256:'required for existing file',relativePath:'required for new file',content:'complete UTF-8 text'},
+  'knowledge.document.remove':{knowledgeId:'required; owner only',expectedRevision:'required CAS',documentIds:'active files to remove; immutable originals retained'},
+  'knowledge.document.move':{knowledgeId:'required; owner only',expectedRevision:'required CAS',files:'[{documentId,relativePath}] for rename or move'},
+  'knowledge.document.copy':{knowledgeId:'destination library; owner only',expectedRevision:'destination CAS',sourceKnowledgeId:'source library',files:'[{documentId,expectedSha256,relativePath}]'},
   'knowledge.index':{knowledgeId:'required; owner only',expectedRevision:'required library CAS',mode:'bm25(default) needs no model download; vector modes require a compatible real index'},
   'knowledge.import.begin':{knowledgeId:'required; owner only',expectedRevision:'required library CAS',source:'optional sanitized upload/local/git metadata',replacePaths:'default true; replace active documents by exact relativePath while retaining originals'},
   'knowledge.import.complete':{knowledgeId:'required; owner only',batchId:'required from begin',expectedRevision:'required final upload CAS',failures:'optional explicit per-file failures',cancelled:'optional true preserves saved originals and suppresses automatic indexing'},
@@ -116,14 +120,130 @@ export class KnowledgeService {
   }
   async retainOriginal(knowledge,document,env,source){const existing=await this.originalRecord(knowledge.id,document.id,env.signal,true);if(existing){if(existing.document.sha256!==document.sha256||existing.document.bytes!==document.bytes)fail('RESOURCE_CHANGED','Retained original identity differs from active metadata');return;}const target=await this.target(knowledge.id,`originals/${identifier(document.id,'d')}/manifest.json`,env.signal);await this.fs.writeText(target,JSON.stringify({schemaVersion:1,knowledgeId:knowledge.id,document,...(source?{source:sourceMetadata(source)}:{})}),{kind:'createIfAbsent'},env.signal,this.policy(env));}
   async originalDocument(knowledge,documentId,signal){const active=knowledge.documents.find(doc=>doc.id===documentId);if(active)return active;const manifest=await this.originalRecord(knowledge.id,documentId,signal);return {...manifest.document,retained:true,...(manifest.source?{source:sourceMetadata(manifest.source)}:{})};}
-  async upload(input,env={}){
-    ownerOnly(env);if(this.closed)fail('KNOWLEDGE_UNAVAILABLE','Knowledge service is stopped');const id=identifier(input.knowledgeId,'k'),name=filename(input.name),mimeType=mime(input.mimeType),relativePath=relative(input.relativePath??name);if(!(input.bytes instanceof Uint8Array))fail('INVALID_INPUT','Upload raw bytes');if(input.bytes.byteLength>MAX_KNOWLEDGE_FILE_BYTES)fail('UPLOAD_TOO_LARGE','Knowledge originals are limited to 64 MiB per file');const bytes=Buffer.from(input.bytes),documentId='d-'+randomUUID();let document;
-    const value=await this.change(id,input.expectedRevision,env,async knowledge=>{if(knowledge.archived)fail('KNOWLEDGE_ARCHIVED','Restore knowledge before uploading');if(knowledge.lastImport?.state==='importing'&&input.batchId!==knowledge.lastImport.id)fail('IMPORT_IN_PROGRESS','This library is receiving a different import batch');if(input.batchId!==undefined&&(knowledge.lastImport?.id!==input.batchId||knowledge.lastImport.state!=='importing'))fail('IMPORT_BATCH_CLOSED','The upload batch is not active');if(input.batchId&&knowledge.lastImport.originalBytes+bytes.length>MAX_IMPORT_BYTES)fail('IMPORT_TOO_LARGE','A batch supports at most 128 MiB of original files');if(input.batchId&&knowledge.documents.some(doc=>doc.importId===input.batchId&&doc.relativePath===relativePath))fail('IMPORT_DUPLICATE_PATH','The same relative path occurs more than once in this batch');const replaced=input.batchId&&knowledge.lastImport.replacePaths?knowledge.documents.filter(doc=>doc.relativePath===relativePath):[];if(knowledge.documents.length-replaced.length>=2000)fail('TOO_LARGE','A library supports at most 2000 active original files');const chunks=[];
+  pruneImportDocuments(knowledge,removed){
+    const batch=knowledge.lastImport;
+    if(!batch)return;
+    batch.documentIds=batch.documentIds.filter(id=>!removed.has(id));
+    batch.importedCount=batch.documentIds.length;
+    batch.originalBytes=knowledge.documents.filter(doc=>batch.documentIds.includes(doc.id)).reduce((sum,doc)=>sum+doc.bytes,0);
+  }
+  requireDocumentChanges(knowledge){
+    if(knowledge.archived)fail('KNOWLEDGE_ARCHIVED','Restore knowledge before changing files');
+    if(knowledge.lastImport?.state==='importing')fail('IMPORT_IN_PROGRESS','Finish the active import before changing files');
+  }
+  checkDestinationPaths(knowledge,paths,excluded=new Set()){
+    const occupied=knowledge.documents.filter(doc=>!excluded.has(doc.id)).map(doc=>doc.relativePath);
+    for(const target of paths){
+      relative(target);
+      if(occupied.some(path=>path===target||path.startsWith(target+'/')||target.startsWith(path+'/')))fail('FILE_EXISTS','A file or directory already occupies the destination',{path:target});
+      occupied.push(target);
+    }
+  }
+  async indexDocumentChange(result,env){
+    const id=result.knowledge.id;
+    const running=this.jobs.get(id);
+    if(running&&running.sourceVersion<result.knowledge.contentRevision)running.controller.abort();
+    try{
+      await this.waitForIdle(id);
+      const {value}=await this.record(id,env.signal);
+      if(value.contentRevision!==result.knowledge.contentRevision)return {...result,knowledge:this.publicKnowledge(value)};
+      if(!value.documents.some(doc=>doc.searchable)){
+        const saved=await this.change(id,value.revision,env,knowledge=>{knowledge.index={state:'not-indexed',mode:'bm25',sourceVersion:null};},false);
+        return {...result,knowledge:this.publicKnowledge(saved)};
+      }
+      return {...result,...await this.index({knowledgeId:id,expectedRevision:value.revision,mode:'bm25'},env)};
+    }catch(error){return {...result,indexError:safeError(error)};}
+  }
+  async writeDocument(input,env){
+    ownerOnly(env);
+    if(typeof input.content!=='string')fail('INVALID_INPUT','Supply complete text content');
+    const {value}=await this.record(input.knowledgeId,env.signal);
+    revision(input.expectedRevision,value.revision);
+    this.requireDocumentChanges(value);
+    const previous=input.documentId?this.document(value,input.documentId):null;
+    const relativePath=previous?.relativePath||relative(input.relativePath),name=filename(path.posix.basename(relativePath)),mimeType=previous?.mimeType||'text/plain';
+    if(!previous&&/\.(?:pdf|docx?|pptx?|xlsx?|png|jpe?g|gif|webp|zip|mp[34]|mov|wav)$/i.test(name))fail('KNOWLEDGE_FILE_NOT_EDITABLE','Create a text file or upload the original binary file');
+    const validText=bytes=>{
+      const result=extract(bytes,name,mimeType);
+      if(!result.searchable&&result.projectionReason!=='empty-text')fail('KNOWLEDGE_FILE_NOT_EDITABLE','Use replacement for this file format');
+      try{new TextDecoder('utf-8',{fatal:true}).decode(bytes);}catch{fail('KNOWLEDGE_FILE_NOT_EDITABLE','The file is not complete UTF-8 text');}
+    };
+    if(previous){
+      if(previous.sha256!==input.expectedSha256)fail('VERSION_CONFLICT','The text file changed');
+      validText(await this.original(value,previous,env.signal));
+    }
+    const bytes=Buffer.from(input.content);
+    validText(bytes);
+    const result=await this.upload({...input,name,relativePath,mimeType,bytes,uniquePath:!previous},env);
+    return previous?result:this.indexDocumentChange(result,env);
+  }
+  async removeDocuments(input,env){
+    ownerOnly(env);
+    if(!Array.isArray(input.documentIds)||!input.documentIds.length||input.documentIds.length>2000||new Set(input.documentIds).size!==input.documentIds.length)fail('INVALID_INPUT','Choose distinct files to remove');
+    let removed;
+    const value=await this.change(input.knowledgeId,input.expectedRevision,env,async knowledge=>{
+      this.requireDocumentChanges(knowledge);
+      removed=input.documentIds.map(id=>this.document(knowledge,id));
+      for(const document of removed)await this.retainOriginal(knowledge,document,env);
+      const ids=new Set(input.documentIds);
+      knowledge.documents=knowledge.documents.filter(doc=>!ids.has(doc.id));
+      this.pruneImportDocuments(knowledge,ids);
+    });
+    return this.indexDocumentChange({knowledge:this.publicKnowledge(value),removed:removed.map(doc=>this.publicDocument(doc,value))},env);
+  }
+  async moveDocuments(input,env){
+    ownerOnly(env);
+    if(!Array.isArray(input.files)||!input.files.length||input.files.length>2000||new Set(input.files.map(file=>file?.documentId)).size!==input.files.length)fail('INVALID_INPUT','Choose distinct files to move');
+    const value=await this.change(input.knowledgeId,input.expectedRevision,env,knowledge=>{
+      this.requireDocumentChanges(knowledge);
+      const files=input.files.map(file=>({document:this.document(knowledge,file.documentId),relativePath:relative(file.relativePath)}));
+      this.checkDestinationPaths(knowledge,files.map(file=>file.relativePath),new Set(input.files.map(file=>file.documentId)));
+      for(const file of files){file.document.relativePath=file.relativePath;file.document.name=path.posix.basename(file.relativePath);file.document.updatedAt=stamp();}
+    });
+    return this.indexDocumentChange({knowledge:this.publicKnowledge(value)},env);
+  }
+  async copyDocuments(input,env){
+    ownerOnly(env);
+    if(!Array.isArray(input.files)||!input.files.length||input.files.length>2000)fail('INVALID_INPUT','Choose files to copy');
+    const source=(await this.record(input.sourceKnowledgeId,env.signal)).value;
+    const files=[];
+    let total=0;
+    for(const file of input.files){
+      const document=await this.originalDocument(source,file.documentId,env.signal);
+      if(document.sha256!==file.expectedSha256)fail('VERSION_CONFLICT','The copied original changed');
+      total+=document.bytes;
+      if(total>MAX_IMPORT_BYTES)fail('IMPORT_TOO_LARGE','Copy at most 128 MiB at once');
+      files.push({document,relativePath:relative(file.relativePath)});
+    }
+    const copied=[];
+    const value=await this.change(input.knowledgeId,input.expectedRevision,env,async knowledge=>{
+      this.requireDocumentChanges(knowledge);
+      if(knowledge.documents.length+files.length>2000)fail('TOO_LARGE','A library supports at most 2000 active files');
+      this.checkDestinationPaths(knowledge,files.map(file=>file.relativePath));
+      for(const file of files){
+        const bytes=await this.original(source,file.document,env.signal);
+        const document=await this.storeDocument(knowledge,{name:path.posix.basename(file.relativePath),relativePath:file.relativePath,mimeType:file.document.mimeType,bytes},env);
+        copied.push(document);knowledge.documents.push(document);
+      }
+    });
+    return this.indexDocumentChange({knowledge:this.publicKnowledge(value),documents:copied.map(doc=>this.publicDocument(doc,value))},env);
+  }
+  async storeDocument(knowledge,{name,relativePath,mimeType,bytes,batchId},env,source){
+    const id=knowledge.id,documentId='d-'+randomUUID();
+    const chunks=[];
       for(let offset=0;offset<bytes.length;offset+=CHUNK_BYTES){env.signal?.throwIfAborted();const chunk=bytes.subarray(offset,offset+CHUNK_BYTES),part=String(chunks.length).padStart(4,'0'),target=await this.target(id,`originals/${documentId}/${part}.base64`,env.signal);await this.fs.writeText(target,chunk.toString('base64'),{kind:'createIfAbsent'},env.signal,this.policy(env));chunks.push({size:chunk.length,sha256:digest(chunk)});}
       const extracted=extract(bytes,name,mimeType),{value:projectionText,...projectionState}=extracted;let projection;
       if(extracted.searchable){const target=await this.target(id,`projections/${documentId}.txt`,env.signal);await this.fs.writeText(target,projectionText,{kind:'createIfAbsent'},env.signal,this.policy(env));projection={bytes:Buffer.byteLength(projectionText),characters:projectionText.length,sha256:digest(projectionText),sourceHash:digest(bytes),truncated:extracted.truncated,lineCount:projectionText.split('\n').length};}
-      document={id:documentId,name,mimeType,relativePath,bytes:bytes.length,sha256:digest(bytes),chunks,...projectionState,...(projection?{projection}:{}),...(input.batchId?{importId:input.batchId}:{}),createdAt:stamp(),updatedAt:stamp()};await this.retainOriginal(knowledge,document,env,input.batchId?knowledge.lastImport.source:undefined);for(const previous of replaced)await this.retainOriginal(knowledge,previous,env);if(replaced.length){const retiredIds=new Set(replaced.map(doc=>doc.id));knowledge.documents=knowledge.documents.filter(doc=>!retiredIds.has(doc.id));}knowledge.documents.push(document);if(input.batchId){knowledge.lastImport.documentIds.push(documentId);knowledge.lastImport.importedCount=knowledge.lastImport.documentIds.length;knowledge.lastImport.originalBytes+=bytes.length;}
-    });return {knowledge:this.publicKnowledge(value),document:this.publicDocument(document,value)};
+      const document={id:documentId,name,mimeType,relativePath,bytes:bytes.length,sha256:digest(bytes),chunks,...projectionState,...(projection?{projection}:{}),...(batchId?{importId:batchId}:{}),createdAt:stamp(),updatedAt:stamp()};await this.retainOriginal(knowledge,document,env,source);
+    return document;
+  }
+  async upload(input,env={}){
+    ownerOnly(env);if(this.closed)fail('KNOWLEDGE_UNAVAILABLE','Knowledge service is stopped');const id=identifier(input.knowledgeId,'k'),name=filename(input.name),mimeType=mime(input.mimeType),relativePath=relative(input.relativePath??name);if(!(input.bytes instanceof Uint8Array))fail('INVALID_INPUT','Upload raw bytes');if(input.bytes.byteLength>MAX_KNOWLEDGE_FILE_BYTES)fail('UPLOAD_TOO_LARGE','Knowledge originals are limited to 64 MiB per file');const bytes=Buffer.from(input.bytes);let document;
+    const value=await this.change(id,input.expectedRevision,env,async knowledge=>{if(knowledge.archived)fail('KNOWLEDGE_ARCHIVED','Restore knowledge before uploading');if(knowledge.lastImport?.state==='importing'&&input.batchId!==knowledge.lastImport.id)fail('IMPORT_IN_PROGRESS','This library is receiving a different import batch');if(input.batchId!==undefined&&(knowledge.lastImport?.id!==input.batchId||knowledge.lastImport.state!=='importing'))fail('IMPORT_BATCH_CLOSED','The upload batch is not active');if(input.batchId&&knowledge.lastImport.originalBytes+bytes.length>MAX_IMPORT_BYTES)fail('IMPORT_TOO_LARGE','A batch supports at most 128 MiB of original files');if(input.batchId&&knowledge.documents.some(doc=>doc.importId===input.batchId&&doc.relativePath===relativePath))fail('IMPORT_DUPLICATE_PATH','The same relative path occurs more than once in this batch');const target=input.documentId?this.document(knowledge,input.documentId):null;
+      if(target&&(input.batchId||input.expectedSha256!==target.sha256||relativePath!==target.relativePath))fail('VERSION_CONFLICT','The replacement target changed');
+      if(input.uniquePath===true)this.checkDestinationPaths(knowledge,[relativePath],new Set(target?[target.id]:[]));
+      const replaced=target?[target]:input.batchId&&knowledge.lastImport.replacePaths?knowledge.documents.filter(doc=>doc.relativePath===relativePath):[];if(knowledge.documents.length-replaced.length>=2000)fail('TOO_LARGE','A library supports at most 2000 active original files');document=await this.storeDocument(knowledge,{name,relativePath,mimeType,bytes,batchId:input.batchId},env,input.batchId?knowledge.lastImport.source:undefined);for(const previous of replaced)await this.retainOriginal(knowledge,previous,env);if(replaced.length){const retiredIds=new Set(replaced.map(doc=>doc.id));knowledge.documents=knowledge.documents.filter(doc=>!retiredIds.has(doc.id));this.pruneImportDocuments(knowledge,retiredIds);}knowledge.documents.push(document);if(input.batchId){knowledge.lastImport.documentIds.push(document.id);knowledge.lastImport.importedCount=knowledge.lastImport.documentIds.length;knowledge.lastImport.originalBytes+=bytes.length;}
+    });const result={knowledge:this.publicKnowledge(value),document:this.publicDocument(document,value)};return input.documentId?this.indexDocumentChange(result,env):result;
   }
   document(knowledge,id){identifier(id,'d');const doc=knowledge.documents.find(d=>d.id===id);if(!doc)fail('NOT_FOUND','Original document was not found');return doc;}
   async original(knowledge,doc,signal){const chunks=[];let total=0;if(!Array.isArray(doc.chunks)||doc.chunks.length>Math.ceil(MAX_KNOWLEDGE_FILE_BYTES/CHUNK_BYTES)||!Number.isSafeInteger(doc.bytes)||doc.bytes<0||doc.bytes>MAX_KNOWLEDGE_FILE_BYTES)fail('INVALID_DOCUMENT','Invalid original manifest');for(const [i,part] of doc.chunks.entries()){const target=await this.target(knowledge.id,`originals/${identifier(doc.id,'d')}/${String(i).padStart(4,'0')}.base64`,signal),before=await this.fs.stat(target,signal);if(before?.type!=='file'||before.size>CHUNK_BYTES*4/3+4)fail('INVALID_DOCUMENT','Original chunk is unavailable');const encoded=await this.fs.readText(target,signal),bytes=Buffer.from(encoded,'base64');if(encoded!==bytes.toString('base64')||bytes.length!==part.size||digest(bytes)!==part.sha256||(await this.fs.stat(target,signal))?.version!==before.version)fail('RESOURCE_CHANGED','Original chunk changed');chunks.push(bytes);total+=bytes.length;if(total>MAX_KNOWLEDGE_FILE_BYTES)fail('INVALID_DOCUMENT','Original exceeds size limit');}const bytes=Buffer.concat(chunks,total);if(total!==doc.bytes||digest(bytes)!==doc.sha256)fail('RESOURCE_CHANGED','Original content differs from its manifest');return bytes;}
@@ -197,6 +317,10 @@ export class KnowledgeService {
     case 'knowledge.update':case 'knowledge.archive':{ownerOnly(env);const value=await this.change(input.knowledgeId,input.expectedRevision,env,knowledge=>{if(input.action==='knowledge.archive'){if(input.archived!==undefined&&typeof input.archived!=='boolean')fail('INVALID_INPUT','archived must be boolean');knowledge.archived=input.archived!==false;}else{if(input.name!==undefined)knowledge.name=text(input.name,'name');if(input.description!==undefined)knowledge.description=text(input.description,'description',4000,true);}},input.action==='knowledge.archive');return {knowledge:this.publicKnowledge(value)};}
     case 'knowledge.reference':return this.reference(input,env);
     case 'knowledge.document.get':return this.getDocument(input,env);
+    case 'knowledge.document.write':return this.writeDocument(input,env);
+    case 'knowledge.document.remove':return this.removeDocuments(input,env);
+    case 'knowledge.document.move':return this.moveDocuments(input,env);
+    case 'knowledge.document.copy':return this.copyDocuments(input,env);
     case 'knowledge.import.begin':return this.beginImport(input,env);
     case 'knowledge.import.complete':return this.completeImport(input,env);
     case 'knowledge.index':return this.index(input,env);

@@ -1,6 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {conversationRequestId, selectAIConversationState, isConversationNearBottom, conversationScrollUpdate, legacyDesignerPrompt, designerLegacyPromptRule, isAIRequestActive, needsAIStatusPolling} from './ai-conversation-state.js';
+import {compactConversationMessages, latestAIActivity, conversationRequestId, selectAIConversationState, isConversationNearBottom, conversationScrollUpdate, legacyDesignerPrompt, designerLegacyPromptRule, isAIRequestActive, needsAIStatusPolling} from './ai-conversation-state.js';
+
+test('compact history is bounded without changing the original conversation',()=>{
+  const messages=Array.from({length:8},(_,index)=>({role:index%2?'assistant':'user',text:'x'.repeat(500)}));
+  const compact=compactConversationMessages(messages);
+  assert.equal(compact.length,4);assert.equal(compact[0].text.length,321);
+  assert.equal(messages[4].text.length,500);
+});
+test('activity follows the latest reply in the actual current request',()=>{
+  const messages=[{role:'user',requestId:'old',text:'previous'},{role:'assistant',text:'old reply'},
+    {role:'user',requestId:'new',text:'current'}];
+  assert.equal(latestAIActivity({messages,request:{requestId:'new'}}),'');
+  messages.push({role:'assistant',text:'正在读取\n  页面'});
+  assert.equal(latestAIActivity({messages,request:{requestId:'new'}}),'正在读取 页面');
+  assert.equal(latestAIActivity({messages,request:{requestId:'queued'}}),'');
+});
 
 const stopped = {sessionId: 'session-one', running: false, messages: [
   {role: 'user', text: '生成页面', requestId: 'request-one'},

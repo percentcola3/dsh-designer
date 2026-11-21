@@ -104,3 +104,13 @@ test('serialized identity factory is self-contained and executes without module 
   const node=element('li',{'data-dsh-source':'src_one'}),f=fixture([node]),factory=vm.runInNewContext('('+createSelectionIdentity.toString()+')'),identity=factory({artifact:artifact()},{document:f.document,documentEpoch:'doc-serialized'});
   assert.equal(identity.identify(node).sourceNodeId,'src_one');assert.equal(identity.identify(node).documentEpoch,'doc-serialized');
 });
+
+test('schema artifacts expose their stable authored HTML nodes and retain build identity',()=>{
+  const node=element('p',{'data-dsh-node':'confirm:text'}),schema={kind:'schema',entry:'designs/web/schema-page/hash/page.design.json',version:2,buildId:'schema-build'};
+  const f=fixture([node],schema),selected=f.identity.identify(node);
+  assert.equal(selected.nodeId,'confirm:text');
+  assert.equal(selected.artifact.kind,'schema');
+  assert.equal(selected.artifact.buildId,'schema-build');
+  assert.equal(f.identity.nodeFor('confirm:text'),node);
+  assert.equal(fixture([node],{...schema,entry:'../outside.json'}).identity.identify(node),null);
+});

@@ -128,3 +128,35 @@ test('HTTP authentication failure and redirects are explicit and do not disclose
   await assert.rejects(f.run('probe',{remoteUrl:server.url,credentials:{username:'fixture',password:'wrong-secret'}}),error=>{assert.equal(JSON.stringify({code:error.code,message:error.message,details:error.details}).includes('wrong-secret'),false);return error.code==='GIT_AUTH_FAILED';});
   await assert.rejects(f.run('probe',{remoteUrl:server.url.replace('/remote.git','/redirect'),credentials:server.credentials}),{code:'GIT_REDIRECT_DENIED'});
 });
+
+test('local checkpoints initialize real Git and preserve exact binary bytes and a linear history',async t=>{
+  const f=await fixture(t),files=[encoded('project.json','{"revision":1}'),encoded('designs/main/index.html','<h1>One</h1>'),encoded('assets/pixel.png',Buffer.from([0,255,42]))];
+  const first=await f.run('localCheckpoint',{files,message:'Create project'}),options={fs,dir:f.root};
+  assert.equal(first.branch,'dsh-history');assert.equal(await git.currentBranch(options),'dsh-history');
+  assert.equal((await git.readBlob({...options,oid:first.head,filepath:'assets/pixel.png'})).blob[1],255);
+  assert.equal((await f.run('localCheckpoint',{files})).created,false);
+  const second=await f.run('localCheckpoint',{files:[encoded('project.json','{"revision":2}'),encoded('designs/main/index.html','<h1>Two</h1>')],message:'Save edit'});
+  assert.deepEqual((await git.readCommit({...options,oid:second.head})).commit.parent,[first.head]);
+  assert.equal((await git.log({...options,ref:'dsh-history'})).length,2);
+  assert.equal((await git.readTree({...options,oid:second.head})).tree.some(e=>e.path==='assets'),false);
+});
+
+test('automatic history preserves existing branch, staged bytes, remotes and working files',async t=>{
+  const f=await fixture(t),options={fs,dir:f.root};await git.init({...options,defaultBranch:'feature'});
+  await fsp.writeFile(path.join(f.root,'user.txt'),'Staged user work');await git.add({...options,filepath:'user.txt'});
+  const original=await git.commit({...options,message:'User commit',author});
+  await fsp.writeFile(path.join(f.root,'user.txt'),'Uncommitted staged work');await git.add({...options,filepath:'user.txt'});
+  const before=await fsp.readFile(path.join(f.root,'.git/index'));
+  const saved=await f.run('localCheckpoint',{files:[encoded('project.json','{"revision":1}')],message:'Design save'});
+  assert.equal(await git.resolveRef({...options,ref:'HEAD'}),original);assert.equal(await git.currentBranch(options),'feature');
+  assert.deepEqual(await fsp.readFile(path.join(f.root,'.git/index')),before);
+  assert.equal(await fsp.readFile(path.join(f.root,'user.txt'),'utf8'),'Uncommitted staged work');
+  assert.equal(await git.resolveRef({...options,ref:'dsh-history'}),saved.head);
+});
+
+test('local history refuses aliased Git directories and invalid snapshot paths',async t=>{
+  const f=await fixture(t);await fsp.symlink(os.tmpdir(),path.join(f.root,'.git'));
+  await assert.rejects(f.run('localCheckpoint',{files:[]}),{code:'GIT_UNSAFE_PATH'});
+  const other=await fixture(t);await assert.rejects(other.run('localCheckpoint',{files:[encoded('.workbench/draft.json','private')]}),{code:'GIT_INVALID_PATH'});
+  assert.deepEqual(await fsp.readdir(other.root),[]);
+});

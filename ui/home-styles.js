@@ -6,6 +6,8 @@ export default `
   height: 100%;
   min-height: 0;
   flex: 1;
+  display: flex;
+  flex-direction: column;
   overflow: auto;
   background: var(--wb-home-background,var(--wb-bg));
   color: var(--wb-text);
@@ -13,14 +15,7 @@ export default `
   -webkit-font-smoothing: antialiased;
 }
 .wb-home *, .wb-home *::before, .wb-home *::after { box-sizing: border-box; }
-.wb-home .wb-home-inner { width: min(100%, 1440px); margin: 0 auto; padding: 32px 36px 44px; }
-.wb-home .wb-home-intro { text-align: center; margin-bottom: 28px; }
-.wb-home[data-has-recent=false] .wb-home-inner { padding-top: clamp(64px, 12vh, 140px); }
-.wb-home .wb-home-eyebrow { display: inline-flex; align-items: center; gap: 7px; margin-bottom: 17px; color: var(--wb-muted); font-size: 12px; font-weight: 500; letter-spacing: .07em; }
-.wb-home .wb-home-intro h1 { margin: 0; color: var(--wb-text); font-size: clamp(26px, 3vw, 34px); font-weight: 550; line-height: 1.45; letter-spacing: -.045em; }
-.wb-home .wb-home-eyebrow svg { color: var(--wb-brand-ink); }
-.wb-home .wb-home-heading-accent { color:var(--wb-brand-ink);background:none;-webkit-text-fill-color:currentColor; }
-.wb-home .wb-home-mobile-break { display: none; }
+.wb-home .wb-home-inner { flex: 0 0 auto; width: min(100%, 1440px); margin: auto; padding: 40px 36px 56px; }
 .wb-home .wb-home-composer-host { max-width:920px; margin:0 auto; }
 .wb-home .wb-home-error { max-width: 920px; margin: 0 auto; }
 .wb-home .wb-home-error .wb-error { margin-top: 16px; border: 0; border-radius: var(--wb-radius, 12px); background: var(--wb-danger-bg); color: var(--wb-danger); padding: 13px 16px; overflow-wrap: anywhere; font-size: 12px; }
@@ -34,7 +29,6 @@ export default `
 }
 .wb-home button:focus-visible { outline: 2px solid var(--wb-focus); outline-offset: 4px; }
 @media (min-width: 1400px) {
-  .wb-home .wb-home-inner { padding-top: 32px; }
   .wb-home .wb-home-recent { margin-top: 36px; }
 }
 @media (max-width: 850px) {
@@ -42,7 +36,6 @@ export default `
 }
 @media (max-width: 520px) {
   .wb-home .wb-home-inner { padding: 24px 18px 36px; }
-  .wb-home .wb-home-mobile-break { display: initial; }
   .wb-home .wb-home-recent { margin-top: 36px; }
   .wb-home .wb-home-recent-header { align-items: flex-start; gap: 10px; }
   .wb-home .wb-home-project-grid { gap: 12px; }

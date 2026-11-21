@@ -15,6 +15,8 @@ export function freezeAISubmission({snapshot,activeDesignId,sessionId,projectId}
   }
   return {contextSessionId:sessionId,projectId,activeDesignId:activeDesignId??null,designId:target.designId,artboardId:target.pageId,
     mode:target.pageId||target.path?'edit':'generate',...snap,target,frozenTarget:clone(target),effectiveBinding:snap.binding,
+    ...(target.designId && target.designId===(activeDesignId||target.designId) && snap.binding && Object.hasOwn(snap.binding,'systemId') ?
+      {expectedDesignBinding:{designId:target.designId,systemId:snap.binding.systemId,version:snap.binding.version}}:{}),
     ...(target.sourceWrite?{sourceWrite:target.sourceWrite}:{}),...(target.allowedPaths?{allowedPaths:target.allowedPaths}:{})};
 }
 export function confirmationIsCurrent(pending,{projectId,projectRevision,activeDesignId,prompt,references,attachments,target,selection}){

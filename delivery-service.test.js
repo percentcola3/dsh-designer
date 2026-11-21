@@ -141,3 +141,61 @@ test('revocation during a snapshot read is checked again before publishing respo
 }));
 
 test('shared snapshots reject modified bytes and page-scoped exports refuse missing or remote static assets',()=>fixture(async f=>{const design=await designFixture(f),shared=await f.service.execute({action:'share.create',projectId:design.project.id,expectedRevision:design.project.revision,pageId:design.page.id,scope:'unlisted'},f.context);const exported=await f.service.execute({action:'export.get',projectId:design.project.id,exportId:shared.share.exportId},{policy:f.policy}),entry=exported.manifest.files.find(file=>file.path===design.page.htmlPath);await fs.writeFile(checked(f.root,path.join(design.root,entry.storedPath)),'tampered snapshot');const responseValue=response();await shareRequest(f.service,req(shared.share.url),responseValue);assert.equal(responseValue.status,409);const changed=await f.store.artboardCommit({projectId:design.project.id,artboardId:design.page.id,expectedRevision:shared.projectRevision,html:'<!doctype html><html><body><img src="https://remote.invalid/private.png"></body></html>'},undefined,f.policy);await assert.rejects(f.service.execute({action:'export.create',projectId:design.project.id,expectedRevision:changed.projectRevision,pageId:design.page.id},f.context),{code:'EXPORT_REMOTE_RESOURCE'})}));
+
+test('one image batch captures multiple states with current revisions and compact durable receipts',()=>fixture(async f=>{
+  const design=await designFixture(f),seen=[];
+  f.owner.imageCapture=async input=>{seen.push({scene:input.scene,revision:input.expectedRevision,nodeIds:input.nodeIds});return {bytesBase64:png.toString('base64'),width:1440,height:1000,metadata:{runtime:{scene:input.scene},fontStatus:'loaded',imageFailures:0}}};
+  const result=await f.service.execute({action:'export.create',projectId:design.project.id,pageId:design.page.id,expectedRevision:design.project.revision,format:'png',captures:[{scene:'list'},{scene:'detail',nodeIds:['detail-panel']},{scene:'validation'}]},f.context);
+  assert.equal(result.complete,true);assert.equal(result.captures.length,3);assert.equal(result.projectRevision,design.project.revision+3);
+  assert.deepEqual(seen.map(item=>item.revision),[design.project.revision,design.project.revision+1,design.project.revision+2]);
+  assert.deepEqual(seen.map(item=>item.scene),['list','detail','validation']);assert.deepEqual(seen[1].nodeIds,['detail-panel']);
+  for(const item of result.captures){assert.ok(item.export.id);assert.equal(item.capture.metadata.fontStatus,'loaded');assert.equal(item.manifest,undefined)}
+  assert.equal((await f.service.execute({action:'export.list',projectId:design.project.id},f.context)).exports.length,3);
+}));
+
+test('a partially failed capture batch returns saved receipts and resumes the remaining states',()=>fixture(async f=>{
+  const design=await designFixture(f);let fail=true;
+  f.owner.imageCapture=async input=>{if(input.scene==='detail'&&fail)throw Object.assign(Error('Scene unavailable'),{code:'CAPTURE_SCENE_UNAVAILABLE'});return {bytesBase64:png.toString('base64')}};
+  const input={action:'export.create',projectId:design.project.id,pageId:design.page.id,expectedRevision:design.project.revision,format:'png',captures:[{scene:'list'},{scene:'detail'},{scene:'empty'}]};
+  const partial=await f.service.execute(input,f.context);
+  assert.equal(partial.complete,false);assert.equal(partial.failedIndex,1);assert.equal(partial.captures.length,1);assert.equal(partial.error.code,'CAPTURE_SCENE_UNAVAILABLE');assert.equal(partial.projectRevision,design.project.revision+1);
+  fail=false;const resumed=await f.service.execute({...input,expectedRevision:partial.projectRevision,captures:input.captures.slice(partial.failedIndex)},f.context);
+  assert.equal(resumed.complete,true);assert.equal(resumed.captures.length,2);assert.equal(resumed.projectRevision,design.project.revision+3);
+  assert.equal((await f.service.execute({action:'export.list',projectId:design.project.id},f.context)).exports.length,3);
+}));
+
+test('capture batches validate their envelopes before mutations and reauthorize each model request',()=>fixture(async f=>{
+  const design=await designFixture(f),input={action:'export.create',projectId:design.project.id,pageId:design.page.id,expectedRevision:design.project.revision,format:'png'};
+  const invalid=[[],new Array(25).fill({scene:'list'}),[{pageId:'foreign'}],[{projectId:'foreign'}],[{expectedRevision:1}],[null]];
+  for(const captures of invalid)await assert.rejects(f.service.execute({...input,captures},f.context),{code:'INVALID_CAPTURE_BATCH'});
+  await assert.rejects(f.service.execute({...input,format:'zip',captures:[{scene:'list'}]},f.context),{code:'INVALID_CAPTURE_BATCH'});
+  assert.equal((await f.service.execute({action:'export.list',projectId:design.project.id},f.context)).exports.length,0);
+  f.owner.bindings=new Map([['agent',design.project.id]]);
+  const seen=[];f.owner.aiWorkbench={async authorizeAction(request){seen.push(request);if(request.nodeIds?.includes('foreign'))throw Object.assign(Error('Selected nodes only'),{code:'SCOPE_DENIED'});return {input:request,policy:f.policy}}};
+  f.owner.imageCapture=async()=>({bytesBase64:png.toString('base64')});
+  const result=await f.service.execute({...input,captures:[{scene:'detail',nodeIds:['foreign']}]},{...f.context,agent:{id:'agent'}});
+  assert.equal(result.complete,false);assert.equal(result.failedIndex,0);assert.equal(result.error.code,'SCOPE_DENIED');assert.equal(result.captures.length,0);assert.equal(seen.length,1);
+}));
+
+test('concurrent project changes stop a capture batch and return the current conflict revision',()=>fixture(async f=>{
+  const design=await designFixture(f);let calls=0;
+  f.owner.bindings=new Map([['agent',design.project.id]]);
+  f.owner.aiWorkbench={async authorizeAction(request){
+    if(++calls===2)await f.store.mutate(design.project.id,request.expectedRevision,'Intervening user update',project=>{project.name='User changed name'},undefined,f.policy,false);
+    return {input:request,policy:f.policy};
+  }};
+  f.owner.imageCapture=async()=>({bytesBase64:png.toString('base64')});
+  const input={action:'export.create',projectId:design.project.id,pageId:design.page.id,expectedRevision:design.project.revision,format:'png',captures:[{scene:'list'},{scene:'detail'}]},context={...f.context,agent:{id:'agent'}};
+  const result=await f.service.execute(input,context);
+  assert.equal(result.complete,false);assert.equal(result.captures.length,1);assert.equal(result.error.code,'VERSION_CONFLICT');assert.equal(result.failedIndex,1);assert.equal(result.projectRevision,design.project.revision+2);
+  assert.equal((await f.store.projectGet(design.project.id)).project.name,'User changed name');
+  const resumed=await f.service.execute({...input,expectedRevision:result.projectRevision,captures:input.captures.slice(result.failedIndex)},context);
+  assert.equal(resumed.complete,true);assert.equal(resumed.captures.length,1);assert.equal(resumed.projectRevision,design.project.revision+3);
+}));
+
+test('each capture scene alias and explicit default override a shared batch scene',()=>fixture(async f=>{
+  const design=await designFixture(f),scenes=[];
+  f.owner.imageCapture=async input=>{scenes.push(input.scene);assert.equal(input.sceneId,input.scene);return {bytesBase64:png.toString('base64')}};
+  const result=await f.service.execute({action:'export.create',projectId:design.project.id,pageId:design.page.id,expectedRevision:design.project.revision,format:'png',scene:'shared',captures:[{sceneId:'detail'},{scene:null},{}]},f.context);
+  assert.equal(result.complete,true);assert.deepEqual(scenes,['detail',null,'shared']);assert.deepEqual(result.captures.map(item=>item.scene),scenes);
+}));

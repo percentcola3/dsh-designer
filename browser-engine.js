@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomUUID,createHash } from 'node:crypto';
+import {parse,serialize} from 'parse5';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import {cssDependencyUrls} from './asset-archive.js';
+import {cssDependencyUrls,rewriteCSSResourceUrls} from './asset-archive.js';
 
 export const BROWSER_RESULT_MARKER = '__DSH_DESIGNER_BROWSER_RESULT__';
 const MARKER = BROWSER_RESULT_MARKER;
@@ -49,6 +50,29 @@ export function createCliRunner({ executable = process.env.EGO_BROWSER_CLI || pa
 const emit = expression => `console.log(${JSON.stringify(MARKER)} + JSON.stringify({ok:true,value:${expression}}));`;
 const resume = entry => `const task = await taskSpace(${JSON.stringify(entry.spaceId)}); const page = task.page(${JSON.stringify(entry.label)}); ${entry.width ? `await page.cdp('Emulation.setDeviceMetricsOverride',{width:${entry.width},height:${entry.height},deviceScaleFactor:1,mobile:false});` : ''}`;
 const observe = `const meta = await page.evaluate(() => ({url:location.href,title:document.title,width:innerWidth,height:innerHeight,documentHeight:document.documentElement.scrollHeight,scrollX,scrollY})); const shot = await page.cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false},{timeout:10000}); const events = await page.events(); const responses = events.filter(e => e.method === 'Network.responseReceived').map(e => ({requestId:e.params.requestId,url:e.params.response.url,mimeType:e.params.response.mimeType}));`;
+
+function elementSelector(el){
+  if(!el)return null;
+  if(el.id)return '#'+CSS.escape(el.id);
+  const parts=[];
+  for(let n=el;n;n=n.parentElement){
+    const index=n.parentElement?[...n.parentElement.children].filter(s=>s.tagName===n.tagName).indexOf(n)+1:1;
+    parts.unshift(n.tagName.toLowerCase()+':nth-of-type('+index+')');
+  }
+  return parts.join(' > ');
+}
+
+// getEventListeners is provided by Chromium only in a CDP command-line evaluation.
+function readLocalControls(selector){
+  const result=[];
+  for(const node of [...document.querySelectorAll('button,a,input,[role=button],[role=tab],[onclick]')].slice(0,300)){
+    const listeners=getEventListeners(node).click||[];
+    if(!listeners.length||listeners.length>8)continue;
+    const handlers=listeners.map(l=>Function.prototype.toString.call(l.listener));
+    if(handlers.every(handler=>handler.length<=2000))result.push({selector:selector(node),handlers});
+  }
+  return result;
+}
 
 /** Bounded readiness only: never scroll, click, submit, or rewrite the source DOM. */
 export async function waitForCaptureAssets({timeoutMs=2000}={}){
@@ -127,29 +151,50 @@ export function captureDocument({ maxNodes = 6000 } = {}) {
   for (const [declaration,id] of sharedStyles) extra.push(`[data-designer-style="${id}"]{${declaration};animation:none!important;transition:none!important}`);
   const style = document.createElement('style'); style.setAttribute('data-designer-capture',''); style.textContent = extra.join('\n').replace(/<\/style/gi,'<\\/style'); (root.querySelector('head') || root).appendChild(style);
   const meta = document.createElement('meta'); meta.setAttribute('http-equiv','Content-Security-Policy'); meta.setAttribute('content', "script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"); (root.querySelector('head') || root).prepend(meta);
-  return { html:'<!DOCTYPE html>\n' + root.outerHTML, resourceUrls:[...resources], nodes, navigation:nodes.filter(n => n.tag === 'a' && n.attrs.href).map(n => ({nodeId:n.id,url:n.attrs.href,text:n.text})), warnings:[...new Set(warnings)], url:location.href,title:document.title,width:innerWidth,height:innerHeight,documentHeight:document.documentElement.scrollHeight };
+  return { html:'<!DOCTYPE html>\n' + root.outerHTML, resourceUrls:[...resources], nodes, navigation:nodes.filter(n => n.tag === 'a' && n.attrs.href).map(n => ({nodeId:n.id,url:n.attrs.href,text:n.text})), warnings:[...new Set(warnings)], url:location.href,baseURL:document.baseURI,title:document.title,width:innerWidth,height:innerHeight,documentHeight:document.documentElement.scrollHeight };
+}
+
+function mhtmlCid(value){const id=decodeURIComponent(String(value).replace(/^cid:/i,''));if(!/^[a-z\d][a-z\d._@+-]{0,255}$/i.test(id))throw failure('MHTML_CID_INVALID','Snapshot has an invalid internal Content-ID');return 'cid:'+id;}
+function resolveMhtmlCid(value,aliases,onFailure){if(!/^cid:/i.test(value))return value;try{const key=mhtmlCid(value),url=aliases.get(key);if(url)return url;onFailure({url:key,code:'MHTML_CID_MISSING',reason:'Snapshot Content-ID has no captured resource part'});}catch(error){onFailure({url:value,code:error.code||'MHTML_CID_INVALID',reason:error.message});}return 'about:blank#snapshot-resource-unavailable';}
+/** Resolve package-local references only; unknown CIDs never become network requests. */
+export function restoreMhtmlReferences(html,aliases,onFailure=()=>{}){
+  if(!/cid:/i.test(html))return html;const document=parse(html),stack=[document],resolve=value=>resolveMhtmlCid(value,aliases,onFailure);
+  while(stack.length){const node=stack.pop();for(const attribute of node.attrs||[]){if(['href','src','poster','background'].includes(attribute.name)&&/^cid:/i.test(attribute.value))attribute.value=resolve(attribute.value);if(attribute.name==='style')attribute.value=rewriteCSSResourceUrls(attribute.value,resolve);if(['srcset','imagesrcset'].includes(attribute.name))attribute.value=attribute.value.replace(/(^|,\s*)(cid:[^\s,]+)/gi,(_all,prefix,url)=>prefix+resolve(url));}if(node.tagName==='style')for(const child of node.childNodes||[])if(child.nodeName==='#text')child.value=rewriteCSSResourceUrls(child.value,resolve);for(const child of node.childNodes||[])stack.push(child);if(node.content)stack.push(node.content);}
+  return serialize(document);
 }
 
 /** Decode Chromium MHTML assets without writing or trusting its executable HTML. */
-export function parseMhtml(data, { maxResourceBytes = DEFAULTS.maxResourceBytes, maxTotalBytes = DEFAULTS.maxTotalBytes, onFailure=()=>{} } = {}) {
-  const boundary = /boundary\s*=\s*(?:"([^"]+)"|([^\s;]+))/i.exec(data);
-  if (!boundary) {if(data)onFailure({url:'',code:'INVALID_MHTML',reason:'Chromium snapshot did not contain a multipart boundary'});return [];}
-  const results = []; let total = 0;
-  for (const part of data.split('--' + (boundary[1] || boundary[2])).slice(1)) {
-    const split = /\r?\n\r?\n/.exec(part); if (!split) continue;
-    const headers = part.slice(0,split.index).replace(/\r?\n[\t ]+/g,' ');
-    const get = name => new RegExp('(?:^|\\n)' + name + ':\\s*([^\\r\\n]+)','i').exec(headers)?.[1]?.trim();
-    let url = get('Content-Location'); const mimeType = (get('Content-Type')?.split(';')[0] || 'application/octet-stream').trim().toLowerCase();
-    if (!url || /(?:javascript|ecmascript|html)/i.test(mimeType)) continue;
-    try{const parsed=new URL(url);if(!['http:','https:','blob:'].includes(parsed.protocol)||parsed.username||parsed.password)throw new Error('Only static HTTP(S) or owned blob snapshot resources are supported');parsed.hash='';url=parsed.href;}catch(error){onFailure({url,code:'UNSAFE_RESOURCE_URL',reason:error.message});continue;}
-    let body = part.slice(split.index + split[0].length).replace(/\r?\n$/, ''); const encoding = get('Content-Transfer-Encoding'); let bytes;
-    if (/^base64$/i.test(encoding || '')) {const compact=body.replace(/\s/g,'');bytes=Buffer.from(compact,'base64');if(bytes.toString('base64')!==compact){onFailure({url,code:'INVALID_RESOURCE_BYTES',reason:'Snapshot resource has invalid base64'});continue;}}
-    else if (/^quoted-printable$/i.test(encoding || '')) { body = body.replace(/=\r?\n/g,''); const octets = []; for (let i = 0; i < body.length; i++) { if (body[i] === '=' && /^[a-f\d]{2}$/i.test(body.slice(i+1,i+3))) { octets.push(parseInt(body.slice(i+1,i+3),16)); i += 2; } else octets.push(body.charCodeAt(i) & 255); } bytes = Buffer.from(octets); }
-    else bytes = Buffer.from(body,'utf8');
-    if (bytes.length > maxResourceBytes || total + bytes.length > maxTotalBytes) {onFailure({url,code:'RESOURCE_LIMIT',reason:'Snapshot resource exceeds capture byte limits'});continue;}
-    total += bytes.length; results.push({url,mimeType,bytesBase64:bytes.toString('base64'),category:category(mimeType),source:'mhtml'});
+export function parseMhtml(data,{maxResourceBytes=DEFAULTS.maxResourceBytes,maxTotalBytes=DEFAULTS.maxTotalBytes,onFailure=()=>{},onAlias=()=>{},sourceUrl,baseUrl}={}){
+  const boundary=/boundary\s*=\s*(?:"([^"]+)"|([^\s;]+))/i.exec(data);if(!boundary){if(data)onFailure({url:'',code:'INVALID_MHTML',reason:'Chromium snapshot did not contain a multipart boundary'});return [];}
+  const parts=[];for(const [index,part]of data.split('--'+(boundary[1]||boundary[2])).slice(1).entries()){const split=/\r?\n\r?\n/.exec(part);if(!split)continue;const headers=part.slice(0,split.index).replace(/\r?\n[\t ]+/g,' '),get=name=>new RegExp('(?:^|\\n)'+name+':\\s*([^\\r\\n]+)','i').exec(headers)?.[1]?.trim();parts.push({index,get,body:part.slice(split.index+split[0].length).replace(/\r?\n$/,'')});}
+  if(!sourceUrl)sourceUrl=parts.find(part=>/^text\/html(?:;|$)/i.test(part.get('Content-Type')||'')&&/^https?:/i.test(part.get('Content-Location')||''))?.get('Content-Location');
+  let owner;try{if(sourceUrl)owner=new URL(webUrl(sourceUrl));}catch{/* CID parts require a valid selected HTTP(S) source. */}
+  let documentBase;try{documentBase=webUrl(baseUrl||owner?.href);}catch{/* Without an HTTP(S) base no internal stylesheet is reconstructed. */}
+  const results=[],aliases=new Map(),conflicts=new Set();let total=0;
+  for(const part of parts){const {get}=part,mimeType=(get('Content-Type')?.split(';')[0]||'application/octet-stream').trim().toLowerCase(),contentId=get('Content-ID');let url=get('Content-Location')||(contentId?'cid:'+contentId.replace(/^<([^<>]+)>$/,'$1'):undefined);if(!url||/(?:javascript|ecmascript|html)/i.test(mimeType))continue;
+    const ids=[];let internal=false;try{if(/^cid:/i.test(url)){internal=true;url=mhtmlCid(url);ids.push(url);if(!owner||!documentBase)throw failure('MHTML_CID_ORIGIN_REQUIRED','Internal snapshot resources require the selected HTTP(S) document origin and base');}else url=resourceUrl(url);if(contentId)ids.push(mhtmlCid(contentId.replace(/^<([^<>]+)>$/,'$1')));}catch(error){onFailure({url,code:error.code||'UNSAFE_RESOURCE_URL',reason:error.message});continue;}
+    let body=part.body,bytes;const encoding=get('Content-Transfer-Encoding');
+    if(/^base64$/i.test(encoding||'')){const compact=body.replace(/\s/g,'');bytes=Buffer.from(compact,'base64');if(bytes.toString('base64')!==compact){onFailure({url,code:'INVALID_RESOURCE_BYTES',reason:'Snapshot resource has invalid base64'});continue;}}
+    else if(/^quoted-printable$/i.test(encoding||'')){body=body.replace(/=\r?\n/g,'');const octets=[];for(let i=0;i<body.length;i++){if(body[i]==='='&&/^[a-f\d]{2}$/i.test(body.slice(i+1,i+3))){octets.push(parseInt(body.slice(i+1,i+3),16));i+=2;}else octets.push(body.charCodeAt(i)&255);}bytes=Buffer.from(octets);}else bytes=Buffer.from(body,'utf8');
+    if(bytes.length>maxResourceBytes||total+bytes.length>maxTotalBytes){onFailure({url:ids[0]||url,code:'RESOURCE_LIMIT',reason:'Snapshot resource exceeds capture byte limits'});continue;}
+    total+=bytes.length;const resource={url,mimeType,bytesBase64:bytes.toString('base64'),category:category(mimeType),source:'mhtml',internal,baseURL:internal?documentBase:url};results.push(resource);
+    for(const id of new Set(ids)){const previous=aliases.get(id);if(previous&&(previous.url!==url||previous.bytesBase64!==resource.bytesBase64)){conflicts.add(id);onFailure({url:id,code:'MHTML_CID_CONFLICT',reason:'Snapshot Content-ID names conflicting resource parts'});}else aliases.set(id,resource);}
   }
-  return results;
+  for(const id of conflicts)aliases.delete(id);
+  const complete=(resource,trail=new Set())=>{
+    if(resource.complete)return resource.invalid?undefined:resource.url;
+    if(trail.size>=100){resource.invalid=true;onFailure({url:resource.url,code:'MHTML_CID_DEPTH',reason:'Snapshot internal stylesheet dependency depth exceeds capture limits'});return undefined;}
+    if(trail.has(resource)){resource.invalid=true;onFailure({url:resource.url,code:'MHTML_CID_CYCLE',reason:'Snapshot has cyclic internal stylesheet references'});return undefined;}
+    const next=new Set(trail);next.add(resource);let bytes=Buffer.from(resource.bytesBase64,'base64');
+    if(resource.mimeType==='text/css'&&(resource.internal||/cid:/i.test(bytes.toString('utf8')))){
+      const resolve=value=>{if(/^cid:/i.test(value)){let key;try{key=mhtmlCid(value);}catch(error){onFailure({url:value,code:error.code||'MHTML_CID_INVALID',reason:error.message});return 'about:blank#snapshot-resource-unavailable';}const target=aliases.get(key),url=target&&complete(target,next);if(url)return url;onFailure({url:key,code:'MHTML_CID_MISSING',reason:'Snapshot Content-ID has no usable captured resource part'});return 'about:blank#snapshot-resource-unavailable';}if(!value||/^(?:#|data:)/i.test(value))return value;try{return new URL(value,resource.baseURL).href;}catch{return value;}};
+      bytes=Buffer.from(rewriteCSSResourceUrls(bytes.toString('utf8'),resolve));
+    }
+    if(resource.internal)resource.url=new URL('/.dsh-capture/mhtml/'+createHash('sha256').update(bytes).digest('hex')+(resource.mimeType==='text/css'?'.css':'.bin'),owner).href;
+    resource.bytesBase64=bytes.toString('base64');resource.complete=true;return resource.invalid?undefined:resource.url;
+  };
+  for(const resource of results)complete(resource);for(const [id,resource]of aliases)if(!resource.invalid)onAlias(id,resource.url);
+  return results.filter(resource=>!resource.invalid).map(({internal,baseURL,complete,invalid,...resource})=>resource);
 }
 
 export function cssResourceUrls(text,base){return cssDependencyUrls(text,base,{allowBlob:true});}
@@ -170,7 +215,14 @@ export class BrowserEngine {
     const requestedSpace=input.spaceId;
     if(requestedSpace!==undefined&&(!Number.isSafeInteger(requestedSpace)||requestedSpace<1))throw failure('INVALID_BROWSER_SPACE','Use the exact positive existing TaskSpace ID');
     if(requestedSpace!==undefined&&this.spaceId!==null&&requestedSpace!==this.spaceId)throw failure('BROWSER_SPACE_SCOPE','This workbench already uses another shared TaskSpace');
-    const result = await this._run(`const task = await taskSpace(${JSON.stringify(this.spaceId ?? requestedSpace ?? this.spaceName)}); ${emit('{spaceId:task.spaceId}')} `);
+    let result;
+    try {
+      result = await this._run(`const task = await taskSpace(${JSON.stringify(this.spaceId ?? requestedSpace ?? this.spaceName)}); ${emit('{spaceId:task.spaceId}')} `);
+    } catch (error) {
+      if (requestedSpace!==undefined||this.retainSpace||this.spaceId===null||!/task\s*space.*not found/i.test(error.message||'')) throw error;
+      this.spaceId=null;this.browsers.clear();this.spaceName=`Designer ${randomUUID()}`;
+      result=await this._run(`const task = await taskSpace(${JSON.stringify(this.spaceName)}); ${emit('{spaceId:task.spaceId}')} `);
+    }
     if(requestedSpace!==undefined&&result.spaceId!==requestedSpace)throw failure('BROWSER_SPACE_MISMATCH','Existing TaskSpace identity did not match; no fallback space was created');
     this.spaceId = result.spaceId;if(requestedSpace!==undefined)this.retainSpace=true;
     const entry = {browserId:randomUUID(),projectId:input.projectId,spaceId:this.spaceId,label:null,width,height,responses:new Map()};
@@ -182,31 +234,39 @@ export class BrowserEngine {
     } catch (error) { if (entry.label && !isControlStop(error)) { try { await this._run(`${resume(entry)} await page.close(); ${emit('{closed:true}')}`); this.browsers.delete(entry.browserId); } catch {} } throw error; }
   }); }
   async action(input) { return this._serial(async () => {
-    const entry = this._entry(input.browserId,input.projectId); let operation;
+    const entry = this._entry(input.browserId,input.projectId); let operation,clickTarget='';
     const selector = JSON.stringify(input.selector || '');
     switch (input.type) {
+      case 'observe': operation = ''; break;
       case 'navigate': operation = `await page.goto(${JSON.stringify(webUrl(input.url))},{timeout:20000});`; break;
       case 'resize': operation = `await page.cdp('Emulation.setDeviceMetricsOverride',{width:${dimension(input.width,1280)},height:${dimension(input.height,800)},deviceScaleFactor:1,mobile:false});`; break;
-      case 'click': if (input.selector) operation = `await page.click(${selector},{label:'interact with page'});`; else { if (![input.x,input.y].every(Number.isFinite) || Math.abs(input.x) > 10000 || Math.abs(input.y) > 10000) throw failure('INVALID_ACTION','click requires selector or finite x/y'); operation = `await page.mouse.click(${input.x},${input.y},{label:'interact with page'});`; } break;
+      case 'click':
+        if(input.recordTarget&&(input.selector||[input.x,input.y].every(Number.isFinite))){
+          const get=input.selector?'document.querySelector('+selector+')':'document.elementFromPoint('+input.x+','+input.y+')';
+          clickTarget=`const clickSelector=await page.evaluate(()=>{const el=${get};return (${elementSelector.toString()})(el?.closest('button,a,input,select,textarea,summary,[role=button],[role=tab]')||el);});`;
+        }
+        if (input.selector) operation = `await page.click(${selector},{label:'interact with page'});`; else { if (![input.x,input.y].every(Number.isFinite) || Math.abs(input.x) > 10000 || Math.abs(input.y) > 10000) throw failure('INVALID_ACTION','click requires selector or finite x/y'); operation = `await page.mouse.click(${input.x},${input.y},{label:'interact with page'});`; } break;
       case 'type': if (typeof input.text !== 'string' || input.text.length > 10000) throw failure('INVALID_ACTION','type requires text up to 10000 characters'); operation = input.selector ? `await page.fill(${selector},${JSON.stringify(input.text)});` : `await page.keyboard.insertText(${JSON.stringify(input.text)});`; break;
       case 'key': if (typeof input.key !== 'string' || input.key.length > 100) throw failure('INVALID_ACTION','key requires a key chord'); operation = `await page.keyboard.press(${JSON.stringify(input.key)});`; break;
       case 'scroll': { const dx = input.deltaX ?? 0; const dy = input.deltaY ?? 0; if (![dx,dy].every(Number.isFinite) || Math.abs(dx) > 10000 || Math.abs(dy) > 10000) throw failure('INVALID_ACTION','scroll delta must be finite and at most 10000'); operation = `const position = await page.evaluate(() => ({x:Math.floor(innerWidth/2),y:Math.floor(innerHeight/2)})); await page.mouse.move(position.x,position.y,{label:'scroll page content'}); await page.mouse.wheel(${dx},${dy},{label:'scroll page content'});`; break; }
       case 'back': case 'forward': operation = `const history = await page.cdp('Page.getNavigationHistory'); const destination = history.entries[history.currentIndex ${input.type === 'back' ? '-' : '+'} 1]; if (destination) await page.cdp('Page.navigateToHistoryEntry',{entryId:destination.id});`; break;
       default: throw failure('INVALID_ACTION','Unsupported browser action');
     }
-    return this._update(entry,await this._run(`${resume(entry)} ${operation} ${observe} ${emit("{...meta,screenshot:'data:image/png;base64,'+shot.data,responses}")}`));
+    return this._update(entry,await this._run(`${resume(entry)} ${clickTarget} ${operation} ${observe} ${emit("{...meta,clickSelector:typeof clickSelector==='string'?clickSelector:undefined,screenshot:'data:image/png;base64,'+shot.data,responses}")}`));
   }); }
-  async capture({browserId,projectId,clip}) { return this._serial(async () => {
+  async capture({browserId,projectId,clip,localControls=false}) { return this._serial(async () => {
     const entry = this._entry(browserId,projectId); const limits = this.limits; const deadline = Date.now() + limits.captureTimeoutMs;
     if (clip && (!['x','y','width','height'].every(k => Number.isFinite(clip[k])) || clip.x < 0 || clip.y < 0 || clip.x > 1000000 || clip.y > 1000000 || clip.width < 1 || clip.height < 1 || clip.width > 3840 || clip.height > 3840)) throw failure('INVALID_REGION','Screenshot region must be bounded document CSS pixels');
     const observation = clip ? observe.replace("{format:'png',captureBeyondViewport:false}",JSON.stringify({format:'png',captureBeyondViewport:true,clip:{x:clip.x,y:clip.y,width:clip.width,height:clip.height,scale:1}})) : observe;
-    const raw = await this._run(`${resume(entry)} const settled=await page.evaluate(${waitForCaptureAssets.toString()},{timeoutMs:2000}); let mhtml = ''; const warnings = [...(settled?.warnings||[])]; try { const value = await page.cdp('Page.captureSnapshot',{format:'mhtml'},{timeout:15000}); if (Buffer.byteLength(value.data) <= ${limits.maxTotalBytes * 2}) mhtml = value.data; else warnings.push('MHTML exceeded capture size limit'); } catch(error) { if (isControlStop(error)) throw error; warnings.push('MHTML unavailable: ' + error.message); } const dom = await page.evaluate(${captureDocument.toString()},${JSON.stringify({maxNodes:limits.maxNodes})}); ${observation} ${emit("{...dom,screenshot:'data:image/png;base64,'+shot.data,responses,mhtml,warnings:[...dom.warnings,...warnings]}")}`,Math.min(limits.timeoutMs,limits.captureTimeoutMs));
+    const readHandlers=localControls?`let localControls=[];const inspection=await page.cdp('Runtime.evaluate',{expression:${JSON.stringify('('+readLocalControls.toString()+')('+elementSelector.toString()+')')},includeCommandLineAPI:true,returnByValue:true});localControls=inspection.result?.value||[];`:'const localControls=[];';
+    const raw = await this._run(`${resume(entry)} const settled=await page.evaluate(${waitForCaptureAssets.toString()},{timeoutMs:2000}); let mhtml = ''; const warnings = [...(settled?.warnings||[])]; try { const value = await page.cdp('Page.captureSnapshot',{format:'mhtml'},{timeout:15000}); if (Buffer.byteLength(value.data) <= ${limits.maxTotalBytes * 2}) mhtml = value.data; else warnings.push('MHTML exceeded capture size limit'); } catch(error) { if (isControlStop(error)) throw error; warnings.push('MHTML unavailable: ' + error.message); } ${readHandlers} const dom = await page.evaluate(${captureDocument.toString()},${JSON.stringify({maxNodes:limits.maxNodes})}); ${observation} ${emit("{...dom,localControls,screenshot:'data:image/png;base64,'+shot.data,responses,mhtml,warnings:[...dom.warnings,...warnings]}")}`,Math.min(limits.timeoutMs,limits.captureTimeoutMs));
     if (size(raw.html) > limits.maxHtmlBytes) throw failure('CAPTURE_HTML_LIMIT','Captured document exceeds the HTML size limit');
     const snapshot = this._update(entry,raw); const resources = new Map(); const failures = []; let total = 0;
     const add = resource => { const bytes = Buffer.from(resource.bytesBase64,'base64').length; if (resources.has(resource.url)) return; if (bytes > limits.maxResourceBytes || total + bytes > limits.maxTotalBytes || resources.size >= limits.maxResources) { failures.push({url:resource.url,reason:'Resource byte/count limit exceeded'}); return; } total += bytes; resources.set(resource.url,resource); };
-    const snapshotFailures=[],cached = new Map(parseMhtml(raw.mhtml,{...limits,onFailure:value=>snapshotFailures.push(value)}).map(r => [r.url,r]));
+    const snapshotFailures=[],snapshotAliases=new Map(),cached = new Map(parseMhtml(raw.mhtml,{...limits,sourceUrl:raw.url,baseUrl:raw.baseURL,onFailure:value=>snapshotFailures.push(value),onAlias:(id,url)=>snapshotAliases.set(id,url)}).map(r => [r.url,r]));
+    snapshot.html=restoreMhtmlReferences(snapshot.html,snapshotAliases,value=>snapshotFailures.push(value));
     const pending=new Set(),remember=url=>{try{pending.add(resourceUrl(url));}catch(error){failures.push({url,code:error.code||'UNSAFE_RESOURCE_URL',reason:error.message});}};
-    for(const url of raw.resourceUrls||[])remember(url);
+    for(const value of raw.resourceUrls||[]){const url=resolveMhtmlCid(value,snapshotAliases,item=>snapshotFailures.push(item));if(!url.startsWith('about:blank#snapshot-resource-unavailable'))remember(url);}
     for(const resource of cached.values())if(resource.category!=='other'||/^(?:audio|video)\//.test(resource.mimeType))remember(resource.url);
     for(const item of snapshotFailures)if(item.url&&/^(?:https?:|blob:)/i.test(item.url))remember(item.url);
     const seen = new Set(); let interrupted = false;

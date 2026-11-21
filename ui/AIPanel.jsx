@@ -1,4 +1,5 @@
 import React from "react";
+import {Icon} from "./brand.jsx";
 import {createPortal} from 'react-dom';
 import ErrorToast from './ErrorToast.jsx';
 import { Button, ErrorBox, Modal, errorValue } from "./common.jsx";
@@ -8,63 +9,30 @@ import { uploadFile } from "./upload.js";
 import { getComposeAdmission } from "./compose-admission.js";
 import { chooseTargetScope, targetFromSelection, consumeTargetChoice, selectionForSubmission, sourceTemplateConfirmation } from "./target-state.js";
 import { aiDockStyles } from "./ai-dock-styles.js";
-import {conversationRequestId, selectAIConversationState, isAIRequestActive, needsAIStatusPolling, isConversationNearBottom, conversationScrollUpdate} from './ai-conversation-state.js';
+import {isAIRequestActive, needsAIStatusPolling} from './ai-conversation-state.js';
 import DesignerComposer from "./DesignerComposer.jsx";
 import {useNativeDesignerComposer} from "./NativeComposerControls.jsx";
 const scopes = [["read", "只读分析"], ["selection", "选中元素"], ["page", "当前页面"], ["design", "当前设计"],
 ["project", "整个项目"]];
 function AIPanel({ ctx, api, legacy, nativeAccess={}, projects=[], knowledge=[], systems=[], project, activeDesignId=null, design, designs = [], pages, files = [], target, onTarget, binding, references,
-onReferences, onLocate, onCompleted, onHide, onError, canvasSelection, refreshToken, layout = "sidebar", onLayoutChange }) {
+onReferences, onLocate, onCompleted, onHide, onError, canvasSelection, onClearSelection, refreshToken, layout = "sidebar", onLayoutChange }) {
   const [state, setState] = React.useState({}), [draft, setDraft] = React.useState(""), [error, setError] = React.useState(
-  null), [sending, setSending] = React.useState(false), [attachments, setAttachments] = React.useState([]), [lastSubmission,
-  setLastSubmission] = React.useState(null), [draftVersion, setDraftVersion] = React.useState(null), [effectiveBinding, setEffectiveBinding] = React.
+  null), [sending, setSending] = React.useState(false), [attachments, setAttachments] = React.useState([]), [draftVersion, setDraftVersion] = React.useState(null), [effectiveBinding, setEffectiveBinding] = React.
   useState(binding), [bindingLoading, setBindingLoading] = React.useState(false), [resolvedBindingKey, setResolvedBindingKey] = React.
   useState(""), [draftReady, setDraftReady] = React.useState(false);
   const [statusRefresh,setStatusRefresh]=React.useState(0);
   const stateRef=React.useRef(state);stateRef.current=state;
   const composerRef=React.useRef(null),panelRef=React.useRef(null),submissionLock=React.useRef(false);
-  const [pendingTarget,setPendingTarget]=React.useState(null);
+  const [pendingTarget,setPendingTarget]=React.useState(null), [pendingSource,setPendingSource]=React.useState(null);
+  const Conversation = legacy?.NativeConversation;
   const bindingDesignId=activeDesignId||target.designId,activeDesign=designs.find(d=>d.id===bindingDesignId)||design;
   const native=useNativeDesignerComposer({ctx:legacy?.nativeContext||ctx,api,projectId:project.id,useSessionAccess:nativeAccess.useSessionAccess,useRemoteAccess:nativeAccess.useRemoteAccess,composerRef,locked:sending||!draftReady,onError:setError,onSessionReady:(_sessionId,recovered)=>{if(recovered)setError(current=>current===recovered?null:current);}});
   const isDock = layout === "dock", [targetOpen, setTargetOpen] = React.useState(false),
-    [historyOpen, setHistoryOpen] = React.useState(true), panelId = React.useId();
-  const [hasUnread, setHasUnread] = React.useState(false), [cancelledRequestId, setCancelledRequestId] = React.useState(null);
-  const messagesRef = React.useRef(null), followingMessages = React.useRef(true), messageScrollTop = React.useRef(0), previousMessages = React.useRef(null);
-  const targetId = `${panelId}-target`, historyId = `${panelId}-history`, historyActionsId = `${panelId}-history-actions`;
-  const toggleHistory = () => setHistoryOpen((value) => !value);
-  const scrollToLatest = () => {
-    followingMessages.current = true;
-    const node = messagesRef.current;
-    if (node) { node.scrollTop = node.scrollHeight; messageScrollTop.current = node.scrollTop; }
-    setHasUnread(false);
-  };
-  const onMessagesScroll = () => {
-    const node = messagesRef.current;
-    if (!node) return;
-    messageScrollTop.current = node.scrollTop;
-    followingMessages.current = isConversationNearBottom(node);
-    if (followingMessages.current) setHasUnread(false);
-  };
-  const messageSignature = JSON.stringify(state.messages || []);
-  React.useLayoutEffect(() => {
-    const changed = previousMessages.current !== messageSignature;
-    previousMessages.current = messageSignature;
-    const update = conversationScrollUpdate({following: followingMessages.current, changed, visible: historyOpen});
-    if (update.unread) setHasUnread(true);
-    const node = messagesRef.current;
-    if (!node || !historyOpen) return;
-    if (update.scrollToBottom) scrollToLatest();
-    else node.scrollTop = messageScrollTop.current;
-  }, [messageSignature, historyOpen, layout]);
-  React.useEffect(() => {
-    const node = messagesRef.current;
-    if (!node || typeof ResizeObserver !== 'function') return;
-    const observer = new ResizeObserver(() => {
-      if (followingMessages.current && node.clientHeight) scrollToLatest();
-    });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
+    [dockExpanded, setDockExpanded] = React.useState(false),
+    panelId = React.useId();
+  const conversationExpanded = !isDock || dockExpanded;
+  const targetId = `${panelId}-target`, historyId = `${panelId}-history`;
+  const toggleConversationSize = () => setDockExpanded(value => !value);
   const composing = React.useRef(false), current = React.useRef({ draft, references, attachments, target }), restored = React.
   useRef(false), draftTimer = React.useRef(null), mounted = React.useRef(true), composeOwner = React.useRef({}),
   ownerProjectId = React.useRef(project.id).current, liveProjectId = React.useRef(project.id), projectRevision = React.useRef(project.revision);
@@ -85,20 +53,26 @@ onReferences, onLocate, onCompleted, onHide, onError, canvasSelection, refreshTo
       mounted.current = false;
     };
   }, []);
+  const bindingIntent=React.useRef(new Map());
   const changeSystem=async choice=>{
     const designId=bindingDesignId;
     if(!designId)throw errorValue('请先在目标设置中选择一个设计。','DESIGN_REQUIRED');
     const owner=ownerProjectId;
-    const nextBinding=choice?{mode:'independent',systemId:choice.systemId,version:choice.version}:{mode:'none'};
-    const saved=await api('binding.set',{projectId:owner,designId,expectedRevision:projectRevision.current,binding:nextBinding,contextSessionId:native.sessionId});
+    bindingIntent.current.set(designId,choice?.systemId??null);
+    const nextBinding=choice?{mode:'independent',systemId:choice.systemId}:{mode:'none'};
+    const latest=await api('project.get',{projectId:owner});
+    if(!isLive()||current.current.bindingDesignId!==designId)return;
+    const saved=await api('binding.set',{projectId:owner,designId,expectedRevision:latest.project.revision,binding:nextBinding,contextSessionId:native.sessionId});
     if(!isLive())return;
     const r=await api('binding.resolve',{projectId:owner,designId});
     if(!isLive()||current.current.bindingDesignId!==designId)return;
-    setEffectiveBinding(r.effectiveBinding||r.binding||r);
+    const resolved=r.effectiveBinding||r.binding||r;
+    if ((resolved.systemId??null)!==(choice?.systemId??null)) throw errorValue('规范绑定未确认，请重新选择后发送。','BINDING_CHANGED');
+    setEffectiveBinding(resolved);
     setResolvedBindingKey(`${owner}:${designId}:${saved.projectRevision??saved.project?.revision??projectRevision.current}`);
   };
   const bindingKey = `${project.id}:${bindingDesignId || "project"}:${project.revision}`, bindingReady = resolvedBindingKey ===
-  bindingKey && !bindingLoading && !effectiveBinding?.invalid;
+  bindingKey && !bindingLoading && !effectiveBinding?.invalid && (!bindingIntent.current.has(bindingDesignId)||bindingIntent.current.get(bindingDesignId)===(effectiveBinding?.systemId??null));
   React.useEffect(() => {
     let live = true;
     setBindingLoading(true);
@@ -217,18 +191,27 @@ onReferences, onLocate, onCompleted, onHide, onError, canvasSelection, refreshTo
   }, [project.id, project.aiSessionId, legacy?.subscribeAI, refreshToken, statusRefresh]);
   const confirmationCurrent=pending=>confirmationIsCurrent(pending,{projectId:project.id,projectRevision:project.revision,activeDesignId,prompt:current.current.draft,references:current.current.references,attachments:current.current.attachments,target:current.current.target,selection:current.current.selection});
   React.useEffect(()=>{if(pendingTarget&&!confirmationCurrent(pendingTarget))setPendingTarget(null);},[pendingTarget,project.id,project.revision,activeDesignId,draft,references,attachments,target,canvasSelection]);
-  const submit = async (event, prior, confirmation) => {
+  const submit = async (event, prior, confirmation, sourceConfirmation) => {
     event?.preventDefault();
-    if (!isLive() || composing.current || submissionLock.current || sending || state.running || !bindingReady || !draftReady || !native.canPrompt || !sourceTemplateReady) return;
+    if (!isLive() || composing.current || submissionLock.current || sending || state.running || !bindingReady || !draftReady || !native.canPrompt || htmlSelectionIncomplete) return;
     if(confirmation&&!confirmationCurrent(confirmation)){setPendingTarget(null);setError(errorValue('目标或草稿已变化，请重新提交确认。','TARGET_CONFIRMATION_STALE'));return;}
-    const snap = confirmation?.snapshot || prior || { prompt: current.current.draft, target: structuredClone(current.current.target), references: structuredClone(
+    if(sourceConfirmation&&!confirmationCurrent(sourceConfirmation)){setPendingSource(null);setError(errorValue("选区或草稿已变化，请重新提交确认。","SOURCE_CONFIRMATION_STALE"));return;}
+    const snap = confirmation?.snapshot || sourceConfirmation?.snapshot || prior || { prompt: current.current.draft, target: structuredClone(current.current.target), references: structuredClone(
     current.current.references), attachments: structuredClone(current.current.attachments), selection: structuredClone(current.current.selection), binding: structuredClone(effectiveBinding ||
     {}) };
     if (!snap.prompt.trim()) return;
+    if(sourceSelectionMode&&!sourceTemplateReady&&!confirmation) {
+      if(!sourceElementReady)return;
+      const approved=sourceConfirmation&&JSON.stringify(snap.target.sourceTemplateConfirmed)===JSON.stringify(sourceProof);
+      if(!approved) {
+        const guard=structuredClone({prompt:current.current.draft,references:current.current.references,attachments:current.current.attachments,target:current.current.target,selection:current.current.selection});
+        setPendingSource({projectId:project.id,projectRevision:project.revision,activeDesignId:activeDesignId??null,guard,snapshot:{...structuredClone(snap),target:{...structuredClone(snap.target),sourceTemplateConfirmed:structuredClone(sourceProof)}}});
+        return;
+      }
+    }
     let payload;try{payload=confirmation?confirmedPayload(confirmation):freezeAISubmission({snapshot:snap,activeDesignId,sessionId:native.sessionId,projectId:ownerProjectId});}catch(e){setError(e);return;}
     submissionLock.current=true;setSending(true);
     setError(null);
-    setLastSubmission(snap);
     const isRepeat=confirmation?confirmation.isRepeat:!!prior;
     const { scopeChoice, ...submittedTarget } = snap.target;
     const v = current.current, submittedGeneration = confirmation?.generation || compose.update(composeOwner.current, {
@@ -242,9 +225,8 @@ onReferences, onLocate, onCompleted, onHide, onError, canvasSelection, refreshTo
       // panel unmounts. Cleanup and a reopened panel share the same CAS chain.
       const consumed = !isRepeat ? compose.consume(api, submittedGeneration) : null;
       if (isLive()) {
-        setPendingTarget(null);setLastSubmission({...snap,target:r.target?{...snap.target,...r.target}:submittedTarget,binding:r.effectiveBinding||snap.binding});
+        setPendingTarget(null);
         setStatusRefresh(value=>value+1);
-        setCancelledRequestId(null);
         setState((s) => ({ ...s, ...r, error: null, cancelled: false, running: true, status: "running",
           request: {sessionId: r.sessionId, requestId: r.requestId, generation: 'requested'},
           messages: [...s.messages || [], { role: "user", requestId: r.requestId, text: snap.
@@ -283,8 +265,6 @@ ING");
       if (isLive()) setSending(false);
     }
   };
-  const conversationState = selectAIConversationState(state, project, {cancelledRequestId});
-  const status = conversationState.kind, statusLabel = conversationState.label;
   const targetSummary = target.path ? `${target.sourceId ? project.workbench?.sourceProjects?.find((s) => s.id === target.sourceId)?.name || "外部源码" : "项目文件"} / ${target.path}` :
     `${target.designId ? designs.find((d) => d.id === target.designId)?.name || design?.name || "当前设计" : "项目需求"}${target.pageId ? " / " + (pages.find((p) => p.id === target.pageId)?.name || target.pageId) : ""}${target.nodeIds?.length ? ` / ${target.nodeIds.length} 个元素` : ""}`;
   const sourceSelection=preparedSelection,sourceProof=React.useMemo(()=>sourceTemplateConfirmation(preparedSelection),[preparedSelection]);
@@ -293,36 +273,25 @@ ING");
   const htmlSelectionIncomplete=target.scope==='selection'&&!sourceSelectionMode&&(!sourceSelection?.objects?.length||sourceSelection.objects.some(row=>typeof row.outerHTML!=='string'||!row.outerHTML||row.outerHTMLTruncated||row.outerHTMLComplete===false));
   const sourceTemplateReady=!htmlSelectionIncomplete&&(!sourceSelectionMode||sourceElementReady&&JSON.stringify(target.sourceTemplateConfirmed)===JSON.stringify(sourceProof));
   const scopeSummary = target.path && target.scope !== "read" ? "精确文件路径" : scopes.find(([value]) => value === target.scope)?.[1] || target.scope;
-  const activeError = state.taskRecoveryError || (!state.running && state.error);
-  const errorSummary = activeError ? typeof activeError === "string" ? activeError : activeError.message || activeError.code || String(activeError) : "";
-  return <aside ref={panelRef} className={`wb-ai ${isDock ? "wb-ai-dock" : "wb-ai-sidebar"}`} data-ai-layout={isDock ? "dock" : "sidebar"} aria-label="AI 设计助手">
+  const selectedContext = preparedSelection?.objects?.length || preparedSelection?.nodeIds?.length ? preparedSelection : null;
+  React.useEffect(()=>{if(pendingSource&&!confirmationCurrent(pendingSource))setPendingSource(null);},[pendingSource,project.id,project.revision,activeDesignId,draft,references,attachments,target,canvasSelection]);
+  React.useEffect(()=>{if(state.taskRecoveryError)setError(state.taskRecoveryError);},[state.taskRecoveryError]);
+  return <aside ref={panelRef} className={`wb-ai ${isDock ? "wb-ai-dock" : "wb-ai-sidebar"}`} data-ai-layout={isDock ? "dock" : "sidebar"} data-conversation-expanded={conversationExpanded} aria-label="AI 设计助手">
     <style>{aiDockStyles}</style>
-    <header className="wb-ai-header wb-row">{isDock ? <>
-      <span className="wb-ai-dock-mark" aria-hidden="true">✧</span>
-      <Button className="wb-ai-dock-target wb-grow" aria-label={`目标设置：${targetSummary} · ${scopeSummary}`} title={`${targetSummary} · ${scopeSummary}`} aria-expanded={targetOpen} aria-controls={targetId} onClick={() => setTargetOpen((value) => !value)}>
-        <span className="wb-ai-dock-target-name">{targetSummary}</span><span className="wb-ai-dock-scope">{scopeSummary}</span><span aria-hidden="true">{targetOpen ? "⌃" : "⌄"}</span>
-      </Button>
-    </> : <strong className="wb-grow">✧ AI 设计助手</strong>}
+    <header className="wb-ai-header">
+      <strong className="wb-grow"><Icon name="sparkles" size={14}/>设计助手</strong>
+      <Button aria-label="本次修改范围" title={`${targetSummary} · ${scopeSummary}`} aria-expanded={targetOpen} aria-controls={targetId} onClick={()=>setTargetOpen(value=>!value)}><Icon name="settings" size={15}/></Button>
       <div className="wb-ai-layout-switch" role="group" aria-label="AI 面板布局">
-        <Button aria-label="简易模式" aria-pressed={isDock} onClick={() => onLayoutChange?.('dock')}>简易模式</Button>
-        <Button aria-label="侧边模式" aria-pressed={!isDock} onClick={() => onLayoutChange?.('sidebar')}>侧边模式</Button>
+        <Button aria-label={isDock ? '切换到侧边模式' : '切换到简易模式'} title={isDock ? '侧边模式' : '简易模式'} onClick={()=>onLayoutChange?.(isDock ? 'sidebar' : 'dock')}><Icon name={isDock ? 'layout-sidebar' : 'layout-dock'} size={15}/></Button>
       </div>
-      <Button className="wb-ai-history-toggle" aria-expanded={historyOpen} aria-controls={`${historyId} ${historyActionsId}`} onClick={toggleHistory}>对话{state.messages?.length ? ` · ${state.messages.length}` : ""}</Button>
-      <Button aria-label="收起 AI" onClick={onHide}>{isDock ? "⌄" : "›"}</Button></header>
-    {sourceSelectionMode&&<div className="wb-ai-target" style={{flex:'0 1 auto',maxHeight:160,overflow:'auto'}}>
-      <strong>修改源码模板</strong><p className="wb-muted">修改同一源码节点可能影响它的所有运行实例，范围不限于当前选中实例。</p>
-      {sourceProof?.sources.map(row=><p className="wb-muted" key={`${row.path}:${row.nodeId}`}>{row.path} · {row.nodeId}</p>)}
-      <label className="wb-row"><input type="checkbox" aria-label="确认修改源码模板及其所有实例" disabled={!sourceElementReady} checked={sourceElementReady&&sourceTemplateReady} onChange={event=>onTarget(current=>({...current,sourceTemplateConfirmed:event.target.checked?sourceProof:undefined}))}/>我理解并确认按源码模板修改</label>
-      {!sourceElementReady&&<p className="wb-muted">等待完整元素、持久源码标识与构建版本就绪后才能提交。</p>}
-    </div>}
-    {htmlSelectionIncomplete&&<p className="wb-muted" role="status">等待完整选区元素就绪；请在画布重新选取目标后提交。</p>}
-    {!isDock&&<Button className="wb-ai-sidebar-target-toggle" aria-label={`目标设置：${targetSummary} · ${scopeSummary}`} aria-expanded={targetOpen} aria-controls={targetId} onClick={()=>setTargetOpen(value=>!value)}><span>目标 · {targetSummary} · {scopeSummary}</span><span aria-hidden="true">{targetOpen?'⌃':'⌄'}</span></Button>}
+      {isDock&&<Button className="wb-ai-history-toggle" aria-label={conversationExpanded?'缩小对话区域':'扩大对话区域'} title={conversationExpanded?'缩小对话区域':'扩大对话区域'} aria-expanded={conversationExpanded} aria-controls={historyId} onClick={toggleConversationSize}><Icon name={conversationExpanded?'chevron-down':'chevron-up'} size={15}/></Button>}
+      <Button aria-label="收起 AI" title="收起 AI" onClick={onHide}><Icon name="x" size={15}/></Button>
+    </header>
     <div id={targetId} className="wb-ai-target" hidden={!targetOpen}><strong>目标 · {target.
   path ? `${target.sourceId ? project.workbench?.sourceProjects?.find((s) => s.id === target.sourceId)?.name || "外部源码" :
   "项目文件"} / ${target.path}` : design?.name || "项目需求"}{target.pageId ? " / " + (pages.find((p) => p.id ===
   target.pageId)?.name || target.pageId) : ""}{target.nodeIds?.length ? ` / ${target.nodeIds.length} 个元素` : ""}</strong><span>有效规范 · {bindingLoading ?
-  "读取中…" : effectiveBinding?.system?.name || effectiveBinding?.name || effectiveBinding?.systemId || "未绑定"} {effectiveBinding?.
-  version ? `v${effectiveBinding.version}` : ""} · 来源 {effectiveBinding?.source || effectiveBinding?.mode || "项目"}</span>{target.
+  "读取中…" : effectiveBinding?.system?.name || effectiveBinding?.name || effectiveBinding?.systemId || "未绑定"} · 来源 {effectiveBinding?.source || effectiveBinding?.mode || "项目"}</span>{target.
   path ? <><p>范围 · 仅 {target.path}</p><p className="wb-muted">{target.sourceId ? "登记环境：" + (project.workbench?.
   sourceProjects?.find((s) => s.id === target.sourceId)?.directory || project.workbench?.sourceProjects?.find((s) => s.id ===
   target.sourceId)?.root || target.sourceId) : "当前项目文件"} · {target.scope === "read" ? "只读分析" : "仅列明\
@@ -346,53 +315,28 @@ er", forceSelection: true, projectId: project.id, designId: pages.find((p) => p.
   designs.find((d) => d.pageIds?.includes(canvasSelection.pageId))?.id, pageId: canvasSelection.pageId }))}>仅修改画布选中</Button>}<span className="wb-muted">项目共享对话 · 默认写入 {activeDesign?.folder||'当前项目'} · 外挂知识只读。跨设计稿写入会先确认。</span><details><summary>本次自动上下文</summary><p>项目目标 · {project.
   workbench?.goal || project.description || "尚未填写"}</p><p>需求 · {project.workbench?.requirementsPath || "无"}</p><p>规则 · {project.
   workbench?.rulesPath || "无"}</p><p>对象 · {target.nodeIds?.join(", ") || "未选择元素"}</p><p>当前查看参考不会授予额外修改范围。</p></details></div>
-    <div className="wb-ai-conversation" data-has-messages={Boolean(state.messages?.length)} hidden={!historyOpen}>
-      <div ref={messagesRef} id={historyId} className="wb-ai-messages" aria-label="AI 对话记录" tabIndex={0} onScroll={onMessagesScroll}>
-      {!(state.messages || []).length && <p className="wb-ai-empty wb-muted">还没有对话。描述需求，或引用页面、文件与圈选区域，AI 会在目标范围内工作。</p>}{(state.
-  messages || []).map((m, i) => <article className="wb-message" data-role={m.role} key={m.id || i}><small className="wb-muted">{m.
-  role === "user" ? "你" : "AI"}</small><div>{typeof (m.text || m.content) === "string" ? m.text || m.content : JSON.stringify(
-  m.content)}</div>{m.target && <details><summary>提交时冻结目标</summary><pre>{JSON.stringify({ target: m.target,
-  binding: m.effectiveBinding || m.binding }, null, 2)}</pre></details>}{m.role === "user" && <Button disabled={state.running} onClick={() => {
-    setDraft(typeof (m.text || m.content) === "string" ? m.text || m.content : "");
-    if (m.references) onReferences(m.references);
-    if (m.target) onTarget(m.target);
-  }}>编辑后重发</Button>}{(m.references || []).map((r, j) => <Button key={j} onClick={() => onLocate(r)}>↗ {r.label ||
-  r.path || r.resourceId}</Button>)}</article>)}
-      </div>
-      {hasUnread && <Button className="wb-ai-jump-latest" onClick={scrollToLatest}>有新消息 · 回到底部 ↓</Button>}
-    </div>
-    <div className="wb-ai-task-status" data-state={activeError ? "error" : sending ? "running" : status} role={activeError ? "alert" : "status"} aria-live="polite">
-      <strong>{activeError ? '任务出错' : !draftReady ? "恢复草稿中…" : sending ? "上传 / 提交中…" : bindingLoading ? "读取目标规范…" : statusLabel}</strong>
-      {(activeError?errorSummary:conversationState.detail) && <span>{activeError?errorSummary:conversationState.detail}</span>}
-      {activeError&&conversationState.detail&&conversationState.detail!==errorSummary&&<span>{conversationState.detail}</span>}
-    </div>
-    {!onError&&<ErrorToast error={error} onClose={dismissed=>setError(current=>current===dismissed?null:current)}/>}<div className="wb-ai-compose">
-      <DesignerComposer key={`${project.id}:${bindingDesignId||'project'}`} ref={composerRef} variant="canvas" value={draft} onChange={setDraft}
-        onSubmit={submit} disabled={!draftReady||sending} submitDisabled={!bindingReady||!native.canPrompt||!sourceTemplateReady} submitting={sending}
+    {!onError&&<ErrorToast error={error} onClose={dismissed=>setError(current=>current===dismissed?null:current)}/>}
+    <div id={historyId} className="wb-ai-conversation">
+      {Conversation ? <Conversation reference={native.reference}>
+      <DesignerComposer key={`${project.id}:${bindingDesignId||'project'}`} ref={composerRef} variant="canvas" compact={isDock} value={draft} onChange={setDraft}
+        onSubmit={submit} disabled={!draftReady||sending} submitDisabled={!bindingReady||!native.canPrompt||htmlSelectionIncomplete||sourceSelectionMode&&!sourceElementReady} submitting={sending}
         running={Boolean(state.running)} stopDisabled={!native.canCancel} onStop={async()=>{
-          try{const r=await api('ai.cancel',{projectId:project.id,contextSessionId:native.sessionId});if(isLive()){setCancelledRequestId(conversationRequestId(state,project));setState(s=>({...s,...r,running:false,status:'cancelled'}));}}catch(e){if(isLive())setError(e);}
-        }} ariaLabel="设计要求" placeholder="描述设计、附上参考，输入 @ 引用项目、知识库或文件…" api={api}
-        projectId={project.id} contextSessionId={native.sessionId} onPickDirectory={ctx?.uiWorkspace?.pickDirectory?()=>ctx.uiWorkspace.pickDirectory():undefined} projects={projects} knowledge={knowledge} files={files} references={references} onReferencesChange={onReferences}
+          try{const r=await api('ai.cancel',{projectId:project.id,contextSessionId:native.sessionId});if(isLive()){setState(s=>({...s,...r,running:false,status:'cancelled'}));}}catch(e){if(isLive())setError(e);}
+        }} ariaLabel="设计要求" placeholder="描述设计、附上参考，输入 @ 引用项目、知识库或文件…" api={api} conversation={ctx?.uiConversation}
+        projectId={project.id} contextSessionId={native.sessionId} onPickDirectory={ctx?.uiWorkspace?.pickDirectory?()=>ctx.uiWorkspace.pickDirectory():undefined} projects={projects} knowledge={knowledge} files={files} references={references} onReferencesChange={onReferences} selectionContext={selectedContext} onRemoveSelection={onClearSelection}
         attachments={attachments} onFiles={addFiles} canAttach={draftReady&&native.canUpload}
         onRemoveAttachment={(_attachment,index)=>setAttachments(values=>values.filter((_,i)=>i!==index))}
-        systems={systems} systemChoice={effectiveBinding?.systemId?{systemId:effectiveBinding.systemId,version:effectiveBinding.version}:null}
+        systems={systems} systemChoice={effectiveBinding?.systemId?{systemId:effectiveBinding.systemId}:null}
         onSystemChange={changeSystem} leftControls={native.leftControls} rightControls={native.rightControls} onError={setError}/>
-      <div id={historyActionsId} className="wb-row wb-ai-history-actions" hidden={!historyOpen}>{lastSubmission &&
-  !state.running && <Button disabled={!bindingReady||!sourceTemplateReady} onClick={(e) => submit(e, lastSubmission)}>重发上次任务</Button>}<span className="wb-grow" /><Button disabled={!project.
-  aiSessionId && !state.sessionId} onClick={async () => {
-    try {
-      const expectedSessionId=state.sessionId||project.aiSessionId;
-      const prepared=await api('composer.prepare',{projectId:project.id,refresh:true});
-      if(prepared.sessionId!==expectedSessionId)throw errorValue('项目会话身份已变化，请重新打开项目。','PROJECT_SCOPE');
-      if (legacy?.openFullChat) await legacy.openFullChat(expectedSessionId);
-      else {
-        await ctx.sessions.refresh();
-        await ctx.uiWorkspace.openSession(state.sessionId || project.aiSessionId);
-      }
-    } catch (e) {
-      setError(e);
-    }
-  }}>打开完整会话 ↗</Button></div></div>
+      </Conversation> : <p className="wb-muted" role="alert">当前宿主未提供原生对话视图，请重新加载插件。</p>}
+    </div>
+    {pendingSource&&createPortal(<Modal title="确认修改源码模板" onClose={()=>setPendingSource(null)}>
+      <div className="wb-stack">
+        <p>修改此源码模板会影响它的所有运行实例。</p>
+        {pendingSource.snapshot.target.sourceTemplateConfirmed.sources.map(source=><p className="wb-muted" key={`${source.path}:${source.nodeId}`}>{source.path} · {source.nodeId}</p>)}
+        <div className="wb-row"><Button onClick={()=>setPendingSource(null)}>返回修改</Button><span className="wb-grow"/><Button primary disabled={sending||!confirmationCurrent(pendingSource)} onClick={event=>{const pending=pendingSource;setPendingSource(null);submit(event,null,null,pending);}}>确认并发送</Button></div>
+      </div>
+    </Modal>,panelRef.current?.closest('.wb')||document.body)}
     {pendingTarget&&createPortal(<Modal title="确认本次写入目标" onClose={()=>{if(!sending)setPendingTarget(null);}}>
       <div className="wb-stack"><p>{pendingTarget.details.message||'这次要求的写入范围与当前激活的设计稿不同，请确认后继续。'}</p>
         <p>当前激活 · <strong>{activeDesign?.name||'项目资料'}</strong></p>

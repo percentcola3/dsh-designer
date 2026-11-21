@@ -157,7 +157,7 @@ export function useNativeDesignerComposer({ctx, api, projectId, onSessionReady, 
   const retry = React.useCallback(() => setAttempt(value => value + 1), []);
   const controls = ready ? {ctx, sessionId, binding: current.binding, reference: current.reference, adapter: current.adapter, locked, report} : null;
   return {
-    sessionId, ready, error: current?.error || null,
+    sessionId, ready, reference: ready ? current.reference : undefined, error: current?.error || null,
     canUpload: ready && !locked && access.canUpload,
     canPrompt: ready && !locked && access.canPrompt,
     canCancel: ready && access.canCancel,
@@ -287,8 +287,7 @@ function PermissionControl({ctx, binding, reference, adapter, sessionId, locked,
     else submit(value, catalog.epoch);
   };
   const auto = confirm?.value === 'auto';
-  const shortLabel={'read-only':'只读','workspace-write':'编辑','danger-full-access':'完全访问',auto:'自动',custom:'自定义'}[selection?.currentValue]||'权限';
-  return <><button ref={popup.anchorRef} type="button" className="wb-native-compose-control wb-native-compose-permission" disabled={locked || busy} title={`访问模式，当前：${label}`} aria-label={`访问模式，当前：${label}`} aria-haspopup="dialog" aria-expanded={popup.open} data-testid="native-composer-permission" onClick={() => popup.setOpen(!popup.open)}><Glyph kind="permission"/><span className="wb-native-compose-label">{shortLabel}</span><span className="wb-native-compose-chevron" aria-hidden="true">{busy ? '…' : '⌄'}</span></button>
+  return <><button ref={popup.anchorRef} type="button" className="wb-native-compose-control wb-native-compose-permission" disabled={locked || busy} title={`访问模式，当前：${label}`} aria-label={`访问模式，当前：${label}`} aria-haspopup="dialog" aria-expanded={popup.open} data-testid="native-composer-permission" onClick={() => popup.setOpen(!popup.open)}><Glyph kind="permission"/><span className="wb-native-compose-label">{label}</span><span className="wb-native-compose-chevron" aria-hidden="true">{busy ? '…' : <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="m4 6 4 4 4-4"/></svg>}</span></button>
     {popup.open && <Popup anchorRef={popup.anchorRef} onClose={popup.close} label="Session 权限" testId="native-composer-permission-menu">
       {(catalog.error || failure) && <Notice error={failure || catalog.error} retry={() => {setFailure(null); catalog.retry();}} busy={busy}/>}
       {catalog.loading && <Notice>正在读取 Native 权限目录…</Notice>}
@@ -382,7 +381,7 @@ function VoiceControl({ctx, sessionId, binding, reference, locked, composerRef, 
   const settings = service(ctx, 'pluginNavigation');
   const recording = ['requesting', 'recording', 'transcribing'].includes(phase);
   return <>
-    <button ref={popup.anchorRef} type="button" className="wb-native-compose-control" disabled={locked} aria-label={pending ? '查看保留的语音转写' : availability.ready ? '开始语音输入，使用系统默认麦克风' : '语音输入设置与状态'} title={availability.ready ? '语音输入 · 系统默认麦克风' : undefined} aria-expanded={popup.open} aria-haspopup="dialog" data-testid="native-composer-voice" onMouseDown={event => event.preventDefault()} onClick={() => recording ? popup.setOpen(!popup.open) : start()}><Glyph kind="mic"/></button>
+    <button ref={popup.anchorRef} type="button" className="wb-native-compose-control wb-native-compose-voice" disabled={locked} aria-label={pending ? '查看保留的语音转写' : availability.ready ? '开始语音输入，使用系统默认麦克风' : '语音输入设置与状态'} title={availability.ready ? '语音输入 · 系统默认麦克风' : undefined} aria-expanded={popup.open} aria-haspopup="dialog" data-testid="native-composer-voice" onMouseDown={event => event.preventDefault()} onClick={() => recording ? popup.setOpen(!popup.open) : start()}><Glyph kind="mic"/></button>
     {recording && <span className="wb-native-compose-recording" role="status" data-testid="native-composer-recording"><span className="wb-native-compose-recording-indicator"/>{phase === 'requesting' ? '等待麦克风…' : phase === 'transcribing' ? '转写中…' : '录音中'}{phase === 'recording' && <button type="button" className="wb-native-compose-action" data-testid="native-composer-voice-stop" onClick={finish}>停止</button>}<button type="button" className="wb-native-compose-action" data-testid="native-composer-voice-cancel" onClick={() => cancel()}>取消</button></span>}
     {popup.open && <Popup anchorRef={popup.anchorRef} onClose={popup.close} label="语音输入" testId="native-composer-voice-panel">
       <Notice error={failure}>{pending ? message : message || availability.reason || '使用 DSH 语音服务，将转写文本插入草稿。'}</Notice>
