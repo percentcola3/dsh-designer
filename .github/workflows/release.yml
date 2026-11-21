@@ -24,7 +24,7 @@ jobs:
       ref: ${{ inputs.tag || github.ref }}
       release-tag: ${{ inputs.tag || github.ref_name }}
   publish:
-    name: Publish private GitHub release
+    name: Publish DSH installer
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -50,4 +50,4 @@ jobs:
           fi
           prerelease=()
           if [[ "$RELEASE_TAG" == *-* ]]; then prerelease+=(--prerelease); fi
-          gh release create "$RELEASE_TAG" artifacts/*.tgz artifacts/SHA256SUMS artifacts/release.json --verify-tag --generate-notes --title "$RELEASE_TAG" "${prerelease[@]}"
+          gh release create "$RELEASE_TAG" artifacts/dsh-designer.tgz artifacts/SHA256SUMS artifacts/release.json --verify-tag --generate-notes --title "$RELEASE_TAG" "${prerelease[@]}"

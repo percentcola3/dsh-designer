@@ -140,14 +140,14 @@ test('mobile close icons and fallback text share a center in sheets, dialogs and
             glyph: icon.fontSize, touch: box.width >= 44 && box.height >= 44};
         });
         const sheet = document.querySelector('ds-drawer button');
-        document.body.textContent = JSON.stringify({checks, sheetWidth:sheet.offsetWidth, sheetHeight:sheet.offsetHeight});
+        document.body.textContent = JSON.stringify({checks, sheetHeight:sheet.offsetHeight, horizontalPadding:getComputedStyle(sheet).paddingInline});
       </script>`);
     const html = execFileSync(process.env.CHROME_BIN, ['--headless','--disable-gpu','--no-first-run',
       '--user-data-dir=' + join(dir, 'profile'),'--dump-dom',pathToFileURL(path).href],
       {encoding:'utf8',timeout:20000,stdio:['ignore','pipe','pipe']});
     const body = nodes(parse(html)).find(node => node.tagName === 'body');
     const expected = {centered:true,glyph:'22px',touch:true};
-    assert.deepEqual(JSON.parse(body.childNodes[0].value), {checks:[expected,expected,expected],sheetWidth:54,sheetHeight:48});
+    assert.deepEqual(JSON.parse(body.childNodes[0].value), {checks:[expected,expected,expected],sheetHeight:48,horizontalPadding:'16px'});
   } finally {
     await rm(dir, {recursive:true,force:true,maxRetries:3});
   }

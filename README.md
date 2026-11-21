@@ -4,18 +4,13 @@ DSH Designer 是 DeepSeek Harness 的独立插件。在「设计师模式」里�
 
 ## 安装
 
-包名为 `@local/dsh-designer`。在已登录且有仓库权限的 GitHub 账号下，从 [Releases](https://github.com/percentcola3/dsh-designer/releases) 下载所需版本的 `.tgz` 和 `SHA256SUMS`。在下载目录运行 `shasum -a 256 -c SHA256SUMS`（Linux 可用 `sha256sum -c SHA256SUMS`），再通过 DSH 插件管理器安装本地 `.tgz`。安装完成后从 DSH 侧栏打开「设计师模式」。
+在 DSH 标准模式的对话框粘贴下面这句话，确认安装后，从侧栏打开「设计师模式」。
 
-要安装 **main 上的源码版本**，在仓库根目录执行以下命令。推荐 Node.js 24。
-
-```sh
-npm ci --ignore-scripts
-npm run build
-npm run verify:package
-npm run release:pack
+```text
+请用 DSH 插件管理器安装 https://github.com/percentcola3/dsh-designer/releases/latest/download/dsh-designer.tgz
 ```
 
-生成的安装包和校验文件在 `artifacts/`。Release 与 main 的版本可能不同，可在设计师工作台顶部核对实际加载的版本。
+也可以在 **插件 → 添加插件** 中粘贴同一个地址。DSH 会下载已构建的插件和运行依赖。指定历史版本可在 [Releases](https://github.com/percentcola3/dsh-designer/releases) 中复制对应版本的安装包链接。
 
 ## 从需求到设计稿
 
@@ -45,3 +40,7 @@ npm test
 ```
 
 `check` 在内存中编译客户端，`test:focused` 运行指定测试，`npm test` 运行 portable 回归。真实模型测试使用 `npm run test:models`，会下载测试模型。安装包内包含构建好的客户端和第三方声明。开发约定与发布流程见[贡献指南](CONTRIBUTING.md)、[版本记录](CHANGELOG.md)和[发布说明](docs/RELEASING.md)。
+
+## 开源许可
+
+本项目的原创代码采用 [MIT 许可](LICENSE)。第三方组件、字体及资源保留各自的许可证，详见 [licenses](licenses) 和 [Ant Design 模板声明](templates/antd/assets/LICENSE.txt)。

@@ -59,7 +59,7 @@ jobs:
         with:
           name: designer-package
           path: |
-            artifacts/*.tgz
+            artifacts/dsh-designer.tgz
             artifacts/SHA256SUMS
             artifacts/release.json
           if-no-files-found: error

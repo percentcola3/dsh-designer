@@ -1,6 +1,6 @@
-# 私有版本发布
+# 发布 DSH 安装包
 
-本仓库发布 DSH 插件安装包，不发布 npm。GitHub 仓库及 Release 资产私有，下载者需要相应访问权限。
+稳定版本发布到公开 GitHub Release，每版使用相同的资产名 `dsh-designer.tgz`。README 中的安装地址自动指向最新稳定版。
 
 ## 自动化
 
@@ -44,15 +44,15 @@ git push origin "$VERSION_TAG"
 
 ## 下载和校验
 
-以已发布的 v0.4.20 为例：
+以已发布的 v0.4.79 为例：
 
 ```sh
-gh release view v0.4.20 --repo percentcola3/dsh-designer
-gh release download v0.4.20 --repo percentcola3/dsh-designer --pattern '*.tgz' --pattern SHA256SUMS --pattern release.json
+gh release view v0.4.79 --repo percentcola3/dsh-designer
+gh release download v0.4.79 --repo percentcola3/dsh-designer --pattern '*.tgz' --pattern SHA256SUMS --pattern release.json
 ```
 
 Linux 使用 `sha256sum -c SHA256SUMS`；macOS 使用 `shasum -a 256 -c SHA256SUMS`。
 
-通过 DSH 官方插件管理器安装已校验的本地 `.tgz`，是否需要重启以工具结果为准。不要手动改 profile，不把私有 Release URL 当作未鉴权的公开安装地址。
+通过 DSH 官方插件管理器安装已校验的本地 `.tgz`。是否需要重启以工具结果为准。
 
 安装后分别确认版本、入口和所需业务行为。安装、CI 成功不等于真实模型或外部账号已验收。
