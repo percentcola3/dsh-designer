@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-designer",
-  "version": "0.4.79",
+  "version": "0.4.80",
   "description": "AI design workbench with editable and interactive HTML, versioned projects and resources, source comparison, runtime integration and delivery.",
   "private": true,
   "type": "module",
@@ -174,5 +174,8 @@
   "homepage": "https://github.com/percentcola3/dsh-designer#readme",
   "bugs": {
     "url": "https://github.com/percentcola3/dsh-designer/issues"
-  }
+  },
+  "bundleDependencies": [
+    "ssh2"
+  ]
 }

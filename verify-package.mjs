@@ -12,7 +12,11 @@ const packed=JSON.parse(execFileSync('npm',['pack','--dry-run','--json'],{cwd:ro
 const names=new Set(packed.files.map(f=>f.path));
 const problems=[];
 for(const name of ['index.js','client.js','diagnostics-service.js','diagnostics-guides.js','ai-adapter.js','resource-service.js','upload-service.js','capture-service.js','cordis.patch.yml','knowledge-service.js','knowledge-import-service.js','knowledge-import-helper.js','knowledge-lexical-engine.js','zg-service.js','zg-helper.js','zg-runtime.js','vendor/zg-core.js','vendor/zg-model2vec-worker.js','vendor/zg-provenance.json'])if(!names.has(name))problems.push('Required runtime file is absent: '+name);
-const hostFiles=packed.files.filter(f=>f.path.endsWith('.js')&&f.path!=='client.js');
+for (const name of ['ssh2', 'cpu-features']) {
+  if (!names.has(`node_modules/${name}/package.json`)) problems.push(`Missing bundled dependency: ${name}`);
+}
+if (packed.files.some(file => file.path.endsWith('.node'))) problems.push('Unexpected native addon in portable package. Run npm ci --ignore-scripts before packaging.');
+const hostFiles=packed.files.filter(f=>f.path.endsWith('.js')&&f.path!=='client.js'&&!f.path.startsWith('node_modules/'));
 const dependencies=new Set([...Object.keys(manifest.dependencies||{}),...Object.keys(manifest.optionalDependencies||{})]);
 let imports=0;
 for(const file of hostFiles){
