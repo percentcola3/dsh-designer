@@ -94,6 +94,7 @@
     "desktop-patterns.js",
     "CONTRIBUTING.md",
     "CHANGELOG.md",
+    "docs/images/*.png",
     "docs/FEATURES.md",
     "docs/RELEASING.md"
   ],
