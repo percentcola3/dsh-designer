@@ -125,7 +125,7 @@
   "dependencies": {
     "@ant-design/colors": "8.0.1",
     "@babel/generator": "^7.29.13",
-    "@babel/parser": "^7.29.13",
+    "@babel/parser": "^8.1.2",
     "@babel/traverse": "^7.29.13",
     "@deepseek-ai/dsh-tool-ask-user": "0.2.2-rc.1",
     "@huggingface/tokenizers": "0.1.3",
