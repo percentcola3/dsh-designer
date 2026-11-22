@@ -135,7 +135,7 @@
     "isomorphic-git": "1.44.11",
     "moveable": "0.53.0",
     "parse5": "^8.1.0",
-    "react": "^18.3.1",
+    "react": "^19.3.1",
     "react-dom": "^18.3.1",
     "ssh2": "1.17.0",
     "tree-sitter-wasms": "0.1.13",
